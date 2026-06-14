@@ -38,7 +38,7 @@ Pour **monter de version**, relance simplement la commande `latest`.
 
 L'installateur :
 1. Installe `uv` si absent, vérifie `wmctrl`/`xdotool`
-2. Télécharge le script dans `~/bin/claude-watcher-tui`
+2. Télécharge le script dans `~/.local/bin/claude-watcher-tui`
 3. Définit la langue (demandée dans un terminal ; sinon `CW_LANG=fr|en`)
 4. Crée `~/.config/claude-watcher/config.ini` (config partagée, ignorée si déjà présente)
 
@@ -58,8 +58,15 @@ cd tui
 ## Utilisation
 
 ```bash
-uv run ~/bin/claude-watcher-tui
+uv run ~/.local/bin/claude-watcher-tui
 ```
+
+> **Pas dans votre `PATH` ?** `~/.local/bin` est dans le `PATH` par défaut sur la
+> plupart des distributions, mais pas toutes. Si la commande est introuvable,
+> ajoutez ceci à `~/.profile` (ou au rc de votre shell) puis reconnectez-vous :
+> ```bash
+> export PATH="$PATH:$HOME/.local/bin"
+> ```
 
 ### Raccourcis clavier
 

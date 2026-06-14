@@ -115,10 +115,10 @@ echo "  All dependencies ok"
 
 # ── 2. Script ─────────────────────────────────────────────────────────────────
 echo -e "${CYAN}[2/3] Installing...${RESET}"
-mkdir -p "$HOME/bin"
-fetch "$SCRIPT_NAME" "$HOME/bin/claude-watcher-tui"
-chmod +x "$HOME/bin/claude-watcher-tui"
-echo "  ~/bin/claude-watcher-tui"
+mkdir -p "$HOME/.local/bin"
+fetch "$SCRIPT_NAME" "$HOME/.local/bin/claude-watcher-tui"
+chmod +x "$HOME/.local/bin/claude-watcher-tui"
+echo "  ~/.local/bin/claude-watcher-tui"
 
 # ── 3. Config ─────────────────────────────────────────────────────────────────
 echo -e "${CYAN}[3/3] Config...${RESET}"
@@ -138,4 +138,4 @@ fi
 
 echo ""
 echo -e "${GREEN}Done! Run with:${RESET}"
-echo "  uv run ~/bin/claude-watcher-tui"
+echo "  uv run ~/.local/bin/claude-watcher-tui"
