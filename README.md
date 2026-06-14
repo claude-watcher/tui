@@ -38,7 +38,7 @@ To **upgrade**, just re-run the `latest` one-liner.
 
 The installer will:
 1. Install `uv` if missing, check for `wmctrl`/`xdotool`
-2. Download the script to `~/bin/claude-watcher-tui`
+2. Download the script to `~/.local/bin/claude-watcher-tui`
 3. Set your language (prompted when run in a terminal; `CW_LANG=fr|en` otherwise)
 4. Write `~/.config/claude-watcher/config.ini` (shared config, skipped if it already exists)
 
@@ -58,8 +58,15 @@ cd tui
 ## Usage
 
 ```bash
-uv run ~/bin/claude-watcher-tui
+uv run ~/.local/bin/claude-watcher-tui
 ```
+
+> **Not on your `PATH`?** `~/.local/bin` is on `PATH` by default on most distros,
+> but not all. If the command isn't found, add this to `~/.profile` (or your shell
+> rc) and re-login:
+> ```bash
+> export PATH="$PATH:$HOME/.local/bin"
+> ```
 
 ### Keys
 
