@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["textual>=0.60"]
+# dependencies = ["textual>=0.71"]
 # ///
 """
 Claude Code Watcher — Textual TUI
@@ -28,6 +28,7 @@ import os
 import re
 import subprocess
 import time
+import urllib.request
 from pathlib import Path
 
 _libc = ctypes.CDLL(ctypes.util.find_library('c') or 'libc.so.6', use_errno=True)
@@ -46,6 +47,35 @@ CONFIG_DIR  = Path.home() / '.config' / 'claude-watcher'
 CONFIG_PATH = CONFIG_DIR / 'config.ini'
 
 VERSION = "1.0.0"  # bumped automatically by CI
+
+# Update check — latest published release on GitHub
+GITHUB_RELEASES_API = "https://api.github.com/repos/claude-watcher/tui/releases/latest"
+RELEASES_URL        = "https://github.com/claude-watcher/tui/releases"
+UPDATE_CMD = ("pkill -f claude-watcher || true && curl -fsSL "
+              "https://github.com/claude-watcher/tui/releases/latest/download/install.sh | bash")
+COLOR_VER_OK  = "#2e9e5b"   # dark green — installed version is the latest release
+COLOR_VER_OLD = "#e0524f"   # red — a newer release is available
+
+def _semver_tuple(s: str) -> tuple[int, ...]:
+    """Loose semver → comparable int tuple. 'v1.2.3' → (1, 2, 3)."""
+    parts = [int(n) for n in re.findall(r'\d+', s or '')][:3]
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts)
+
+def _fetch_latest_release() -> str | None:
+    """Latest release tag (without leading 'v'), or None if unavailable."""
+    try:
+        req = urllib.request.Request(
+            GITHUB_RELEASES_API,
+            headers={'User-Agent': 'claude-watcher-tui',
+                     'Accept': 'application/vnd.github+json'},
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+        return (data.get('tag_name') or '').lstrip('v') or None
+    except Exception:
+        return None
 
 # Glyphe titre terminal émis par Claude Code (séquence OSC)
 CLAUDE_IDLE_GLYPH = '✳'   # prompt visible, attend l'utilisateur
@@ -112,6 +142,20 @@ STRINGS = {
         'col_meta':   'pid · durée',
         'col_ctx':    'ctx',
         'count':      '{w} en attente · {p} en cours · {t} total',
+        'about':         'À propos',
+        'close':         'Fermer',
+        'copy':          'Copier la commande',
+        'copied':        'Commande copiée',
+        'ver_uptodate':  'À jour',
+        'ver_outdated':  'Mise à jour disponible',
+        'ver_checking':  'vérification…',
+        'ver_unknown':   'statut inconnu',
+        'ver_current':   'Version installée',
+        'ver_latest':    'Dernière version',
+        'ver_status':    'Statut',
+        'authors':       'Auteurs',
+        'update_cmd':    'Commande de mise à jour',
+        'update_notif':  'Mise à jour disponible : v{v} — appuyez sur « a »',
     },
     'en': {
         'title':      'CLAUDE CODE WATCHER',
@@ -126,6 +170,20 @@ STRINGS = {
         'col_meta':   'pid · elapsed',
         'col_ctx':    'ctx',
         'count':      '{w} waiting · {p} working · {t} total',
+        'about':         'About',
+        'close':         'Close',
+        'copy':          'Copy command',
+        'copied':        'Command copied',
+        'ver_uptodate':  'Up to date',
+        'ver_outdated':  'Update available',
+        'ver_checking':  'checking…',
+        'ver_unknown':   'status unknown',
+        'ver_current':   'Installed version',
+        'ver_latest':    'Latest version',
+        'ver_status':    'Status',
+        'authors':       'Authors',
+        'update_cmd':    'Update command',
+        'update_notif':  'Update available: v{v} — press "a"',
     },
 }
 
@@ -612,8 +670,10 @@ def path_display(cwd: str | None, max_chars: int) -> str:
 from rich.text import Text  # noqa: E402
 
 from textual.app import App, ComposeResult  # noqa: E402
-from textual.containers import Center  # noqa: E402
+from textual.containers import Center, Vertical  # noqa: E402
+from textual.content import Content  # noqa: E402
 from textual.coordinate import Coordinate  # noqa: E402
+from textual.screen import ModalScreen  # noqa: E402
 from textual.widgets import DataTable, Footer, Header, Static  # noqa: E402
 
 
@@ -633,6 +693,71 @@ class SessionTable(DataTable):
         if 0 <= row < self.row_count and col >= 0 \
                 and (row, col) != tuple(self.cursor_coordinate):
             self.post_message(DataTable.RowSelected(self, row, self.ordered_rows[row].key))
+
+
+class AboutScreen(ModalScreen):
+    """Centered modal: about info, version/update status, credits, update command."""
+
+    CSS = """
+    AboutScreen { align: center middle; }
+    #about-box {
+        width: 72; max-width: 90%; height: auto;
+        padding: 1 2; background: #1a1a22; border: round #3a3a4a;
+    }
+    #about-box > Static { margin-bottom: 1; }
+    #about-cmd {
+        background: #15151c; border: round #3a3a4a;
+        padding: 0 1; color: #c8c8d0;
+    }
+    """
+
+    BINDINGS = [
+        ("escape,a,q", "close", "Close"),
+        ("c", "copy_cmd", "Copy"),
+    ]
+
+    def __init__(self, state: str, latest: str | None) -> None:
+        super().__init__()
+        self._state = state
+        self._latest = latest
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="about-box"):
+            yield Static("[b]Claude Code Watcher[/b]\n"
+                         "[dim]Textual TUI — monitors running Claude Code sessions.[/dim]")
+            yield Static(self._version_block())
+            yield Static(f"[dim]{tr('authors')} :[/dim]\n"
+                         "  kardagan\n"
+                         "  [link='https://github.com/babs']babs[/link] [dim](Damien Degois)[/dim]")
+            if self._state == 'old':
+                yield Static(f"[dim]{tr('update_cmd')} :[/dim]")
+                yield Static(UPDATE_CMD, id="about-cmd")
+                yield Static(f"[dim](c) {tr('copy')}  ·  (esc) {tr('close')}[/dim]")
+            else:
+                yield Static(f"[dim](esc) {tr('close')}[/dim]")
+
+    def _version_block(self) -> str:
+        if self._state == 'ok':
+            status = f"[{COLOR_VER_OK}]✓ {tr('ver_uptodate')}[/]"
+        elif self._state == 'old':
+            status = f"[{COLOR_VER_OLD}]⚠ {tr('ver_outdated')}[/]"
+        elif self._state == 'unknown':
+            status = f"[dim]{tr('ver_unknown')}[/dim]"
+        else:
+            status = f"[dim]{tr('ver_checking')}[/dim]"
+        latest = f"v{self._latest}" if self._latest else "—"
+        return (f"{tr('ver_current')} : [b]v{VERSION}[/b]\n"
+                f"{tr('ver_latest')} : {latest}\n"
+                f"{tr('ver_status')} : {status}")
+
+    def action_close(self) -> None:
+        self.dismiss()
+
+    def action_copy_cmd(self) -> None:
+        if self._state != 'old':
+            return
+        self.app.copy_to_clipboard(UPDATE_CMD)
+        self.app.notify(tr('copied'), severity="information", timeout=2)
 
 
 class WatcherApp(App):
@@ -656,6 +781,7 @@ class WatcherApp(App):
         ("r", "refresh", "Refresh"),
         ("c", "toggle_cards", "Cards"),
         ("enter", "focus_session", "Focus terminal"),
+        ("a", "about", "About"),
     ]
 
     # Largeur fixe de la colonne d'état (droite) : "● travaille" = 11 + un peu d'air.
@@ -666,6 +792,8 @@ class WatcherApp(App):
         self._refresh_s = max(0.25, refresh_ms / 1000)
         self._carded = carded
         self._sessions: list[dict] = []
+        self._latest_version: str | None = None
+        self._update_state = 'checking'  # checking | ok | old | unknown
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -682,6 +810,8 @@ class WatcherApp(App):
         self.refresh_sessions()
         self.set_interval(self._refresh_s, self.refresh_sessions)
         self.run_worker(self._watch_sessions_dir(), name="inotify")
+        self.run_worker(self._check_version(), name="vercheck")
+        self.set_interval(6 * 3600, lambda: self.run_worker(self._check_version(), exclusive=True))
 
     async def _watch_sessions_dir(self) -> None:
         """Instant refresh via inotify on Claude's session registry directory.
@@ -800,6 +930,41 @@ class WatcherApp(App):
         self.query_one("#counts", Static).update(
             tr('count').format(w=waiting, p=working, t=len(sessions))
         )
+
+    # ── Version / update check ────────────────────────────────────────────────
+    def format_title(self, title: str, sub_title: str) -> Content:
+        """Color the header sub-title (version) by update state."""
+        if not sub_title:
+            return Content(title)
+        if self._update_state == 'ok':
+            ver, style = sub_title, COLOR_VER_OK
+        elif self._update_state == 'old':
+            ver, style = f"{sub_title} ⚠", COLOR_VER_OLD
+        else:
+            ver, style = sub_title, "dim"
+        return Content.assemble(Content(title), (" — ", "dim"), Content(ver).stylize(style))
+
+    async def _check_version(self) -> None:
+        loop = asyncio.get_running_loop()
+        latest = await loop.run_in_executor(None, _fetch_latest_release)
+        self._apply_version_check(latest)
+
+    def _apply_version_check(self, latest: str | None) -> None:
+        if latest is None:
+            self._update_state, self._latest_version = 'unknown', None
+        else:
+            self._latest_version = latest
+            self._update_state = 'old' if _semver_tuple(latest) > _semver_tuple(VERSION) else 'ok'
+        # Force the header to re-render format_title with the new state (the
+        # empty assignment guarantees a value change so the watcher fires).
+        self.sub_title = ""
+        self.sub_title = f"v{VERSION}"
+        if self._update_state == 'old':
+            self.notify(tr('update_notif').format(v=self._latest_version),
+                        severity="warning", timeout=8)
+
+    def action_about(self) -> None:
+        self.push_screen(AboutScreen(self._update_state, self._latest_version))
 
     # ── Actions ─────────────────────────────────────────────────────────────
     def _focus_row(self, row: int) -> None:
