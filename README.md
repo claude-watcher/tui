@@ -52,8 +52,8 @@ cd tui
 ```
 </details>
 
-> **No hook to install:** status comes from Claude Code's own per-session
-> registry — nothing is added to `settings.json`.
+> **No hook to install:** status comes from Claude Code's own session files
+> (transcripts) — nothing is added to `settings.json`.
 
 ## Usage
 

@@ -338,7 +338,12 @@ def _parse_session_lines(lines: list[str]) -> tuple[str | None, int | None, str 
         kind = ev.get('type', '')
         if state is None:
             if kind == 'assistant':
-                state = 'waiting'
+                # stop_reason discriminates "working" from "waiting": 'tool_use'
+                # (a tool was dispatched, result pending) or a still-streaming
+                # message (None) means Claude is busy; only a terminal end-of-turn
+                # reason means it handed control back and is waiting on the user.
+                sr = (ev.get('message') or {}).get('stop_reason')
+                state = 'working' if sr in (None, 'tool_use', 'pause_turn') else 'waiting'
             elif kind == 'user':
                 state = 'working'
             elif kind == 'system':
@@ -449,11 +454,12 @@ def get_session_state(pid: int, cwd: str | None,
                       config_dir: str | None = None) -> tuple[str, int | None, str | None]:
     """État de la session. Retourne (state, context_pct, tool).
 
-    Source primaire : le registre ~/.claude/sessions/<pid>.json maintenu par
-    Claude (champ `status`). Le JSONL fournit le % de contexte et le nom de
-    l'outil courant, et sert de FALLBACK d'état si le registre manque (session
-    lancée par une version de Claude antérieure à ce mécanisme). `sessionId`
-    donne le chemin exact du JSONL (plus de devinage par slug du cwd).
+    Le registre ~/.claude/sessions/<pid>.json (champ `status`) reste prioritaire
+    s'il existe, mais les versions récentes de Claude Code ne l'écrivent plus :
+    en pratique l'état vient donc du JSONL pour quasiment toutes les sessions.
+    Le JSONL fournit aussi le % de contexte et le nom de l'outil courant.
+    `sessionId` du registre, quand il existe, donne le chemin exact du JSONL ;
+    sinon on devine par slug du cwd.
     """
     reg = get_session_registry(pid, starttime)
     session_id = reg.get('sessionId') if reg else None
