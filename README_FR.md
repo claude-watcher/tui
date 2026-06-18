@@ -53,7 +53,7 @@ cd tui
 </details>
 
 > **Aucun hook à installer :** l'état provient des fichiers de session propres à
-> Claude Code (transcripts) — rien n'est ajouté à `settings.json`.
+> Claude Code — rien n'est ajouté à `settings.json`.
 
 ## Utilisation
 

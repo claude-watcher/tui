@@ -20,10 +20,12 @@ CLI flags (`--lang`, `--refresh-ms`, see the README) override these at launch.
 
 ## Session detection
 
-Status comes from the session **transcript** (`~/.claude/projects/<slug>/<sessionId>.jsonl`).
-A per-session registry (`~/.claude/sessions/<pid>.json`) is still preferred when
-present, but **current Claude Code no longer writes it**, so in practice the
-transcript path drives state for every session. No hook required.
+Status comes from one of two first-party sources, no hook required. The
+per-session registry (`~/.claude/sessions/<pid>.json`) is preferred when Claude
+Code writes it; otherwise state is derived from the session **transcript**
+(`~/.claude/projects/<slug>/<sessionId>.jsonl`). Whether the registry file
+exists depends on the Claude Code version, so the TUI uses it when present and
+falls back to the transcript when it is not.
 
 1. The TUI enumerates sessions by scanning `/proc/<pid>/comm` for an exact match
    on `claude`; field 22 of `/proc/<pid>/stat` gives the process `starttime`
@@ -35,10 +37,10 @@ transcript path drives state for every session. No hook required.
    - `idle` → **idle**
    - `procStart` in the file must match the process `starttime` — a stale file
      from a recycled PID is ignored.
-   Recent Claude Code releases stopped writing this file; the registry block is
-   retained for older sessions but is otherwise dormant.
-3. **State (transcript fallback — the live path today)** — derived from the most
-   recent meaningful entry, bottom-up:
+   Not every Claude Code version writes this file; when it is absent the TUI
+   uses the transcript fallback below.
+3. **State (transcript fallback)** — used when no registry file is present.
+   Derived from the most recent meaningful entry, bottom-up:
    - `assistant` → classified by `message.stop_reason`: `tool_use` / `pause_turn`
      / still-streaming (`null`) → **working**; a terminal reason (`end_turn`,
      `max_tokens`, `stop_sequence`, `refusal`) → **waiting**.
@@ -48,10 +50,10 @@ transcript path drives state for every session. No hook required.
    (working) from one *awaiting permission approval* (which also ends in an
    `assistant` `tool_use` and genuinely needs the user) — both read as
    **working**.
-4. **Context % + current tool** — parsed from the same transcript. Context % is
-   input tokens / window size; the tool is the `name` of the most recent
-   assistant `tool_use` block. With the registry gone, the transcript is located
-   by slugifying `cwd` (see known limitations).
+4. **Context % + current tool** — parsed from the transcript regardless of which
+   state source is used. Context % is input tokens / window size; the tool is
+   the `name` of the most recent assistant `tool_use` block. With no registry,
+   the transcript is located by slugifying `cwd` (see known limitations).
 5. Walk the process tree to find the parent terminal window for click-to-focus.
 
 ### Why the registry instead of hooks
@@ -59,11 +61,11 @@ transcript path drives state for every session. No hook required.
 The earlier model installed Claude Code hooks. It couldn't track a genuine
 `waiting` status: Claude fires no hook event when the user *approves* a
 permission, so a long approved tool stayed stuck on `waiting` until
-`PostToolUse`. The registry carried a real `waiting` status, needed no
-`settings.json` changes, and worked under Wayland. Now that Claude Code no
-longer writes the registry, the transcript fallback is the active source; it
-recovers most of the signal (working vs waiting) but loses the registry's
-ability to flag a permission wait distinctly from a running tool.
+`PostToolUse`. The registry carries a real `waiting` status, needs no
+`settings.json` changes, and works under Wayland. When a Claude Code version
+doesn't write the registry, the transcript fallback takes over; it recovers
+most of the signal (working vs waiting) but loses the registry's ability to
+flag a permission wait distinctly from a running tool.
 
 ### Instant refresh
 
@@ -86,9 +88,8 @@ on the same workspace only; XWayland terminals (e.g. xterm) work everywhere.
 ## Known limitations
 
 - Terminal focus on Wayland is limited — same restrictions as the GTK widget.
-- Current Claude Code no longer writes `~/.claude/sessions/<pid>.json`, so all
-  sessions use the coarser transcript-based state. The registry path is kept for
-  older sessions that still write it.
+- Whether `~/.claude/sessions/<pid>.json` is written depends on the Claude Code
+  version; sessions without it use the coarser transcript-based state.
 - Transcript state can't distinguish a tool that is *executing* from one
   *awaiting permission approval* — both end in an `assistant` `tool_use` and show
   as **working**. A permission-blocked session therefore won't light up
