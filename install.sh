@@ -138,4 +138,4 @@ fi
 
 echo ""
 echo -e "${GREEN}Done! Run with:${RESET}"
-echo "  uv run ~/.local/bin/claude-watcher-tui"
+echo "  claude-watcher-tui"
