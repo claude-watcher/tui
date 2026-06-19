@@ -51,7 +51,7 @@ VERSION = "1.0.0"  # bumped automatically by CI
 # Update check — latest published release on GitHub
 GITHUB_RELEASES_API = "https://api.github.com/repos/claude-watcher/tui/releases/latest"
 RELEASES_URL        = "https://github.com/claude-watcher/tui/releases"
-UPDATE_CMD = ("pkill -f claude-watcher || true && curl -fsSL "
+UPDATE_CMD = ("curl -fsSL "
               "https://github.com/claude-watcher/tui/releases/latest/download/install.sh | bash")
 COLOR_VER_OK  = "#2e9e5b"   # dark green — installed version is the latest release
 COLOR_VER_OLD = "#e0524f"   # red — a newer release is available
