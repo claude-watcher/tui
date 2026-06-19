@@ -485,16 +485,22 @@ def get_session_info_from_jsonl(
     return result
 
 
-def get_session_registry(pid: int, starttime: int) -> dict | None:
-    """Registre de session première-partie écrit par Claude : ~/.claude/sessions/<pid>.json.
+def get_session_registry(pid: int, starttime: int,
+                         config_dir: str | None = None) -> dict | None:
+    """Registre de session première-partie écrit par Claude : <config>/sessions/<pid>.json.
 
     Source d'état primaire (champ `status` temps réel) + `sessionId`/`cwd`.
+    Le registre vit sous le CLAUDE_CONFIG_DIR de l'instance : une session lancée
+    avec un config dir custom écrit dans <config_dir>/sessions/, PAS dans
+    ~/.claude/sessions/. Le chercher au mauvais endroit le rend introuvable et
+    fait retomber (à tort) sur le fallback JSONL.
     Garde anti-recyclage de PID : `procStart` doit correspondre au `starttime`
     (champ 22 de /proc/<pid>/stat) du process courant, sinon fichier périmé →
     ignoré. Retourne le dict, ou None si absent/illisible/périmé.
     """
+    sessions_dir = (Path(config_dir) / 'sessions') if config_dir else _SESSIONS_DIR
     try:
-        data = json.loads((_SESSIONS_DIR / f'{pid}.json').read_text())
+        data = json.loads((sessions_dir / f'{pid}.json').read_text())
     except (OSError, ValueError):
         return None
     ps = data.get('procStart')
@@ -518,7 +524,7 @@ def get_session_state(pid: int, cwd: str | None,
     % de contexte et le nom de l'outil courant. `sessionId` du registre, quand
     il existe, donne le chemin exact du JSONL ; sinon on devine par slug du cwd.
     """
-    reg = get_session_registry(pid, starttime)
+    reg = get_session_registry(pid, starttime, config_dir)
     session_id = reg.get('sessionId') if reg else None
     if reg and not cwd:
         cwd = reg.get('cwd')
@@ -619,6 +625,14 @@ def scan_sessions() -> list[dict]:
             window_id = find_best_window(term_pid, cwd, all_windows)
 
         config_dir = env.get('CLAUDE_CONFIG_DIR') or None
+        if config_dir:
+            # CLAUDE_CONFIG_DIR hérité de l'env de la session : on résout `~`
+            # (quoté → non-expansé par le shell) et on rejette tout chemin
+            # relatif (sans cwd de la session, il pointerait sur le cwd du
+            # watcher → registre/JSONL/watch au mauvais endroit). → défaut.
+            config_dir = os.path.expanduser(config_dir)
+            if not os.path.isabs(config_dir):
+                config_dir = None
         state, context_pct, tool = get_session_state(pid, cwd, p['starttime'], config_dir)
         sessions.append({
             'pid':             pid,
@@ -797,6 +811,8 @@ class WatcherApp(App):
         self._refresh_s = max(0.25, refresh_ms / 1000)
         self._carded = carded
         self._sessions: list[dict] = []
+        self._inotify_fd = -1
+        self._watched_session_dirs: set[str] = set()
         self._latest_version: str | None = None
         self._update_state = 'checking'  # checking | ok | old | unknown
 
@@ -819,20 +835,22 @@ class WatcherApp(App):
         self.set_interval(6 * 3600, lambda: self.run_worker(self._check_version(), exclusive=True))
 
     async def _watch_sessions_dir(self) -> None:
-        """Instant refresh via inotify on Claude's session registry directory.
+        """Instant refresh via inotify on Claude's session registry directories.
 
-        Claude réécrit ~/.claude/sessions/<pid>.json à chaque changement d'état :
+        Claude réécrit <config>/sessions/<pid>.json à chaque changement d'état :
         on rafraîchit dès qu'un de ces fichiers bouge, sans attendre le polling.
+        Le dossier par défaut est surveillé d'emblée ; les CLAUDE_CONFIG_DIR
+        custom sont ajoutés dynamiquement (_add_session_watch) à mesure que le
+        scan les expose — plusieurs watches sur un seul fd inotify.
         """
         _SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
-        ifd = _libc.inotify_init1(os.O_NONBLOCK | os.O_CLOEXEC)
-        if ifd < 0:
+        self._inotify_fd = _libc.inotify_init1(os.O_NONBLOCK | os.O_CLOEXEC)
+        if self._inotify_fd < 0:
+            self._inotify_fd = -1
             return
+        ifd = self._inotify_fd
         try:
-            _libc.inotify_add_watch(
-                ifd, str(_SESSIONS_DIR).encode(),
-                _IN_CLOSE_WRITE | _IN_CREATE | _IN_MOVED_TO,
-            )
+            self._add_session_watch(_SESSIONS_DIR)
             loop = asyncio.get_running_loop()
             ready = asyncio.Event()
             loop.add_reader(ifd, ready.set)
@@ -849,6 +867,21 @@ class WatcherApp(App):
                 loop.remove_reader(ifd)
         finally:
             os.close(ifd)
+            self._inotify_fd = -1
+
+    def _add_session_watch(self, path: Path) -> None:
+        """Watch inotify sur un dossier sessions/ (idempotent ; skip si absent)."""
+        if self._inotify_fd < 0:
+            return
+        key = str(path)
+        if key in self._watched_session_dirs or not path.is_dir():
+            return
+        if _libc.inotify_add_watch(
+            self._inotify_fd, key.encode(),
+            _IN_CLOSE_WRITE | _IN_CREATE | _IN_MOVED_TO,
+        ) < 0:
+            return
+        self._watched_session_dirs.add(key)
 
     # ── Refresh ─────────────────────────────────────────────────────────────
     def refresh_sessions(self) -> None:
@@ -857,6 +890,12 @@ class WatcherApp(App):
         except Exception:
             sessions = []
         self._sessions = sessions
+
+        # Surveille le sessions/ de chaque CLAUDE_CONFIG_DIR exposé (inotify dynamique).
+        for s in sessions:
+            cfg = s.get('config_dir')
+            if cfg:
+                self._add_session_watch(Path(cfg) / 'sessions')
 
         table = self.query_one("#sessions", DataTable)
         empty = self.query_one("#empty", Static)
