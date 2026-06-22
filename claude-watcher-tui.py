@@ -529,7 +529,21 @@ def get_session_state(pid: int, cwd: str | None,
     if reg and not cwd:
         cwd = reg.get('cwd')
     jsonl_state, context_pct, tool = get_session_info_from_jsonl(cwd, config_dir, session_id)
-    state = _STATUS_MAP.get(reg.get('status', ''), 'idle') if reg else (jsonl_state or 'idle')
+    if reg:
+        status = reg.get('status', '')
+        state = _STATUS_MAP.get(status, 'idle')
+        # 'shell' persiste tant qu'un shell de fond tourne (un `!cmd` interactif
+        # ou un Bash run_in_background), MÊME après que Claude a rendu la main :
+        # le statut reste figé sur 'shell' alors que la session attend en réalité
+        # l'utilisateur. On recoupe avec le JSONL — s'il indique que le tour est
+        # terminé (dernier assistant en stop_reason terminal → 'waiting'/'idle'),
+        # le shell n'est qu'un résidu de fond et l'état réel est celui du JSONL,
+        # pas 'working'. jsonl_state vaut None si le JSONL est introuvable : la
+        # condition est alors fausse et on garde l'ancien comportement.
+        if status == 'shell' and jsonl_state in ('waiting', 'idle'):
+            state = jsonl_state
+    else:
+        state = jsonl_state or 'idle'
     return state, context_pct, tool
 
 
