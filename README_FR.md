@@ -85,6 +85,7 @@ uv run ~/.local/bin/claude-watcher-tui
 --refresh-ms MS     intervalle de rafraîchissement (défaut : 2000)
 --once              afficher les sessions en texte brut et quitter (debug)
 --cards             démarrer en mode cartes
+--no-topic          masque le sujet de session sous chaque ligne (bascule avec « t »)
 ```
 
 ## Comment ça marche

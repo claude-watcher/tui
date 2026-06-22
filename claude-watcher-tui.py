@@ -96,11 +96,13 @@ _STATUS_MAP = {
 def load_config() -> dict:
     cfg = configparser.ConfigParser()
     cfg.read(CONFIG_PATH)
-    d = cfg['display'] if 'display' in cfg else {}
-    g = cfg['general'] if 'general' in cfg else {}
+    d = cfg['display']  if 'display'  in cfg else {}
+    g = cfg['general']  if 'general'  in cfg else {}
+    f = cfg['features'] if 'features' in cfg else {}
     return {
         'lang':       g.get('lang', _detect_lang()),
         'refresh_ms': int(d.get('refresh_ms', 2000)),
+        'show_topic': f.get('show_topic', 'true').lower() == 'true',
     }
 
 
@@ -112,6 +114,9 @@ def parse_args(defaults: dict, argv: list[str] | None = None) -> argparse.Namesp
                    help="langue de l'interface (défaut: auto-détectée).")
     p.add_argument('--refresh-ms', type=int, default=defaults['refresh_ms'], dest='refresh_ms',
                    metavar='MS', help=f"intervalle de rafraîchissement (défaut {defaults['refresh_ms']}).")
+    p.add_argument('--no-topic', dest='show_topic', action='store_false',
+                   default=defaults['show_topic'],
+                   help="masque le sujet de session (titre IA) sous chaque ligne.")
     p.add_argument('--once', action='store_true',
                    help="affiche les sessions une fois en texte brut puis quitte (non-TTY / debug).")
     p.add_argument('--frame', action='store_true',
@@ -374,6 +379,60 @@ def _read_tail_lines(path: Path, max_bytes: int) -> tuple[list[str], bool]:
     return lines, start == 0
 
 
+# Topic de session : `ai-title` (aiTitle, généré par Claude) écrit une fois tôt
+# dans le JSONL puis rarement régénéré ; `last-prompt` (lastPrompt) est appendé à
+# chaque tour. Le tail-read de l'état ne les voit pas (titre hors des derniers Ko).
+# Cache dédié {path: (offset_dernière_ligne_complète, title, lastPrompt)} : scan
+# complet au 1er passage, puis relecture du seul delta appendé. L'offset mémorisé
+# tombe toujours sur une frontière de ligne → pas de 1re ligne à jeter.
+_TOPIC_CACHE: dict[str, tuple[int, str | None, str | None]] = {}
+
+
+def _read_topic(path: Path) -> tuple[str | None, str | None]:
+    """(aiTitle, lastPrompt) du JSONL, en ne relisant que les octets ajoutés."""
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return None, None
+    title = last_prompt = None
+    start = 0
+    cached = _TOPIC_CACHE.get(str(path))
+    if cached:
+        prev, title, last_prompt = cached
+        if size == prev:
+            return title, last_prompt
+        if size > prev:
+            start = prev          # delta uniquement (start = frontière de ligne)
+        else:
+            # size < prev → fichier tronqué/rotaté → rescan complet depuis 0 ;
+            # on repart de zéro (titre potentiellement disparu → pas de valeur périmée).
+            title = last_prompt = None
+    try:
+        with path.open('rb') as f:
+            f.seek(start)
+            data = f.read()
+    except OSError:
+        return title, last_prompt
+    nl = data.rfind(b'\n')
+    if nl == -1:                  # aucune ligne complète dans le delta
+        return title, last_prompt
+    for line in data[:nl + 1].decode(errors='ignore').split('\n'):
+        if '"ai-title"' not in line and '"last-prompt"' not in line:
+            continue
+        try:
+            ev = json.loads(line)
+        except Exception:
+            continue
+        if ev.get('type') == 'ai-title' and ev.get('aiTitle'):
+            title = ev['aiTitle']
+        elif ev.get('type') == 'last-prompt' and ev.get('lastPrompt'):
+            last_prompt = ev['lastPrompt']
+    if len(_TOPIC_CACHE) > 200:
+        _TOPIC_CACHE.clear()
+    _TOPIC_CACHE[str(path)] = (start + nl + 1, title, last_prompt)
+    return title, last_prompt
+
+
 def _parse_session_lines(lines: list[str]) -> tuple[str | None, int | None, str | None]:
     """Parse bottom-up : (state, context_pct, tool).
 
@@ -434,17 +493,18 @@ def get_session_info_from_jsonl(
     cwd: str | None,
     config_dir: str | None = None,
     session_id: str | None = None,
-) -> tuple[str | None, int | None, str | None]:
-    """État + % de contexte + outil courant depuis le JSONL de la session.
+) -> tuple[str | None, int | None, str | None, str | None]:
+    """État + % de contexte + outil courant + topic depuis le JSONL de la session.
 
-    Retourne (state, context_pct, tool). `state` ne sert qu'en fallback (registre
-    absent). Si `session_id` est fourni, cible directement <session_id>.jsonl
-    (chemin exact, aucun devinage) ; sinon le .jsonl le plus récent du projet.
-    Court-circuit par mtime + lecture du seul tail (relecture complète si besoin).
+    Retourne (state, context_pct, tool, topic). `state` ne sert qu'en fallback
+    (registre absent) ; `topic` = titre IA, sinon dernier prompt. Si `session_id`
+    est fourni, cible directement <session_id>.jsonl (chemin exact, aucun
+    devinage) ; sinon le .jsonl le plus récent du projet. Court-circuit par mtime
+    + lecture du seul tail (relecture complète si besoin).
     """
     project_dir = cwd_to_project_dir(cwd, config_dir)
     if not project_dir:
-        return None, None, None
+        return None, None, None, None
     latest = None
     if session_id:
         cand = project_dir / f'{session_id}.jsonl'
@@ -453,36 +513,43 @@ def get_session_info_from_jsonl(
     if latest is None:
         jsonl_files = [f for f in project_dir.glob('*.jsonl') if f.is_file()]
         if not jsonl_files:
-            return None, None, None
+            return None, None, None, None
         try:
             latest, _ = max(
                 ((f, f.stat().st_mtime) for f in jsonl_files),
                 key=lambda x: x[1],
             )
         except (OSError, ValueError):
-            return None, None, None
+            return None, None, None, None
     try:
         mtime = latest.stat().st_mtime
     except OSError:
-        return None, None, None
+        return None, None, None, None
     key = str(latest)
     cached = _JSONL_CACHE.get(key)
     if cached and cached[0] == mtime:
-        return cached[1]
-
-    result: tuple[str | None, int | None, str | None] = (None, None, None)
-    try:
-        lines, complete = _read_tail_lines(latest, _JSONL_TAIL_BYTES)
-        result = _parse_session_lines(lines)
-        # Tail tronqué et incomplet (état ou pct manquant) → relecture complète.
-        if not complete and (result[0] is None or result[1] is None):
-            result = _parse_session_lines(latest.read_text(errors='ignore').split('\n'))
-    except Exception:
-        pass
-    if len(_JSONL_CACHE) > 200:
-        _JSONL_CACHE.clear()
-    _JSONL_CACHE[key] = (mtime, result)
-    return result
+        result = cached[1]
+    else:
+        result = (None, None, None)
+        try:
+            lines, complete = _read_tail_lines(latest, _JSONL_TAIL_BYTES)
+            result = _parse_session_lines(lines)
+            # Tail tronqué et incomplet (état ou pct manquant) → relecture complète.
+            if not complete and (result[0] is None or result[1] is None):
+                result = _parse_session_lines(latest.read_text(errors='ignore').split('\n'))
+        except Exception:
+            pass
+        if len(_JSONL_CACHE) > 200:
+            _JSONL_CACHE.clear()
+        _JSONL_CACHE[key] = (mtime, result)
+    # Topic désactivable (features.show_topic) : si off, on saute carrément la
+    # lecture du JSONL pour le titre → aucun coût I/O quand la feature est éteinte.
+    if getattr(CFG, 'show_topic', True):
+        title, last_prompt = _read_topic(latest)
+        topic = title or last_prompt
+    else:
+        topic = None
+    return result[0], result[1], result[2], topic
 
 
 def get_session_registry(pid: int, starttime: int,
@@ -515,8 +582,8 @@ def get_session_registry(pid: int, starttime: int,
 
 def get_session_state(pid: int, cwd: str | None,
                       starttime: int = 0,
-                      config_dir: str | None = None) -> tuple[str, int | None, str | None]:
-    """État de la session. Retourne (state, context_pct, tool).
+                      config_dir: str | None = None) -> tuple[str, int | None, str | None, str | None]:
+    """État de la session. Retourne (state, context_pct, tool, topic).
 
     Le registre ~/.claude/sessions/<pid>.json (champ `status`) est prioritaire
     quand il existe ; selon la version de Claude Code il peut être absent,
@@ -528,7 +595,7 @@ def get_session_state(pid: int, cwd: str | None,
     session_id = reg.get('sessionId') if reg else None
     if reg and not cwd:
         cwd = reg.get('cwd')
-    jsonl_state, context_pct, tool = get_session_info_from_jsonl(cwd, config_dir, session_id)
+    jsonl_state, context_pct, tool, topic = get_session_info_from_jsonl(cwd, config_dir, session_id)
     if reg:
         status = reg.get('status', '')
         state = _STATUS_MAP.get(status, 'idle')
@@ -544,7 +611,7 @@ def get_session_state(pid: int, cwd: str | None,
             state = jsonl_state
     else:
         state = jsonl_state or 'idle'
-    return state, context_pct, tool
+    return state, context_pct, tool, topic
 
 
 def format_elapsed(s) -> str:
@@ -647,10 +714,11 @@ def scan_sessions() -> list[dict]:
             config_dir = os.path.expanduser(config_dir)
             if not os.path.isabs(config_dir):
                 config_dir = None
-        state, context_pct, tool = get_session_state(pid, cwd, p['starttime'], config_dir)
+        state, context_pct, tool, topic = get_session_state(pid, cwd, p['starttime'], config_dir)
         sessions.append({
             'pid':             pid,
             'project':         project_label(cwd),
+            'topic':           topic,
             'cwd':             cwd or '?',
             'elapsed':         p['elapsed'],
             'waiting':         state == 'waiting',
@@ -726,6 +794,20 @@ class SessionTable(DataTable):
         if 0 <= row < self.row_count and col >= 0 \
                 and (row, col) != tuple(self.cursor_coordinate):
             self.post_message(DataTable.RowSelected(self, row, self.ordered_rows[row].key))
+
+    def watch_hover_coordinate(self, old, value) -> None:  # noqa: ANN001
+        # Survol souris : chemin + sujet complets de la ligne pointée. La base gère
+        # le surlignage hover, on n'ajoute que l'infobulle (super() obligatoire).
+        super().watch_hover_coordinate(old, value)
+        tips = getattr(self, "_row_tips", None)
+        if not tips:
+            return
+        try:
+            key = self.coordinate_to_cell_key(value).row_key.value
+        except Exception:
+            self.tooltip = None
+            return
+        self.tooltip = tips.get(key)
 
 
 class AboutScreen(ModalScreen):
@@ -813,6 +895,7 @@ class WatcherApp(App):
         ("q", "quit", "Quit"),
         ("r", "refresh", "Refresh"),
         ("c", "toggle_cards", "Cards"),
+        ("t", "toggle_topic", "Topic"),
         ("enter", "focus_session", "Focus terminal"),
         ("a", "about", "About"),
     ]
@@ -929,7 +1012,8 @@ class WatcherApp(App):
         avail = table.size.width or self.size.width or 80
         proj_w = max(20, avail - self.STATUS_W - 4)  # -4 : gutter curseur + padding cellules
         path_chars = max(8, proj_w - 2)              # -2 : préfixe "● " ligne 1
-        row_h = 3 if self._carded else 2             # carded = 1 ligne vide en plus
+        # Hauteur calculée par ligne : base 2 (● chemin + pid·durée), +1 si un sujet
+        # est affiché, +1 en mode cartes (ligne vide de séparation).
 
         table.clear(columns=True)
         table.add_column("", width=proj_w, key="session")
@@ -937,6 +1021,7 @@ class WatcherApp(App):
 
         waiting = working = 0
         target_row = 0
+        row_tips: dict[str, Text] = {}  # str(pid) → infobulle (chemin + sujet complets)
         for i, s in enumerate(sessions):
             color, badge = session_state_label(s)
             if s['waiting']:
@@ -953,8 +1038,15 @@ class WatcherApp(App):
             cfg = display_config_dir(s.get('config_dir'))
             if cfg:
                 sess.append(f" {CLAUDE_IDLE_GLYPH}{cfg}", style=COLOR_CLAUDE)
+            row_h = 2
+            # Sujet IA (ligne 3) : distingue plusieurs sessions du même cwd.
+            topic = (s.get('topic') or '').strip().split('\n', 1)[0]
+            if topic:
+                sess.append(f"\n  {topic}", style=f"italic {TEXT_DIM2}")
+                row_h += 1
             if self._carded:
                 sess.append("\n")
+                row_h += 1
 
             # Cellule droite (alignée à droite) : badge (ligne 1), ctx% + tool (ligne 2).
             st = Text(justify="right", no_wrap=True)
@@ -974,11 +1066,21 @@ class WatcherApp(App):
             if self._carded:
                 st.append("\n")
 
+            # Infobulle de survol : chemin complet + sujet complet (les cellules
+            # tronquent — chemin par la gauche, sujet à la 1re ligne ellipsée).
+            # Text() et NON str : l'infobulle Textual est un Static(markup=True),
+            # un sujet retombé sur lastPrompt peut contenir des crochets ('[/]',
+            # '[INST]'…) → MarkupError ou texte mangé. Text neutralise le markup.
+            full_topic = (s.get('topic') or '').strip()
+            row_tips[str(s['pid'])] = Text(
+                f"{s['cwd']}\n\nTopic: {full_topic}" if full_topic else s['cwd'])
+
             # key=str(pid) : retrouve la session au clic et restaure le curseur au refresh.
             table.add_row(sess, st, height=row_h, key=str(s['pid']))
             if s['pid'] == prior_pid:
                 target_row = i
 
+        table._row_tips = row_tips
         has_rows = bool(sessions)
         table.display = has_rows
         empty.display = not has_rows
@@ -1051,6 +1153,12 @@ class WatcherApp(App):
         self._carded = not self._carded
         self.refresh_sessions()
 
+    def action_toggle_topic(self) -> None:
+        # Bascule éphémère (la persistance est dans config.ini / --no-topic) ;
+        # lue par get_session_info_from_jsonl qui (ré)active la lecture du titre.
+        CFG.show_topic = not getattr(CFG, 'show_topic', True)
+        self.refresh_sessions()
+
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         self._focus_row(event.cursor_row)
 
@@ -1067,8 +1175,10 @@ def print_once() -> None:
         ctx = f" · ctx {pct}%" if pct is not None else ""
         cfg = display_config_dir(s.get('config_dir'))
         inst = f" · {CLAUDE_IDLE_GLYPH}{cfg}" if cfg else ""
+        topic = (s.get('topic') or '').strip().split('\n', 1)[0]
+        top = f" · {topic}" if topic else ""
         print(f"[{badge:>9}] {s['project']:<30} {tr('pid')} {s['pid']} · "
-              f"{format_elapsed(s['elapsed'])}{ctx}{inst}")
+              f"{format_elapsed(s['elapsed'])}{ctx}{inst}{top}")
 
 
 async def _smoke_frame() -> None:
