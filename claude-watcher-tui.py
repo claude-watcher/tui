@@ -46,7 +46,7 @@ def _detect_lang() -> str:
 CONFIG_DIR  = Path.home() / '.config' / 'claude-watcher'
 CONFIG_PATH = CONFIG_DIR / 'config.ini'
 
-VERSION = "1.0.0"  # bumped automatically by CI
+VERSION = "0.0.0"  # placeholder; release workflow stamps the git tag into this asset
 
 # Update check — latest published release on GitHub
 GITHUB_RELEASES_API = "https://api.github.com/repos/claude-watcher/tui/releases/latest"
