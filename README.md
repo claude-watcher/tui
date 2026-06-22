@@ -85,6 +85,7 @@ uv run ~/.local/bin/claude-watcher-tui
 --refresh-ms MS     refresh interval (default: 2000)
 --once              print sessions as plain text and exit (debug/scripting)
 --cards             start in cards layout
+--no-topic          hide the per-session topic line (toggle live with 't')
 ```
 
 ## How it works
