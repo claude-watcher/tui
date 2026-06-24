@@ -885,7 +885,13 @@ class WatcherApp(App):
     }
     DataTable {
         background: #121214;
-        height: auto;
+        /* 1fr (et non auto) : le tableau remplit l'espace restant et devient
+           l'UNIQUE zone scrollable. En height:auto il débordait de l'écran, qui
+           scrollait alors EN PLUS du tableau → double barre verticale.
+           overflow-x:hidden : jamais de barre horizontale (les cellules sont
+           déjà tronquées/ellipsées à la largeur des colonnes). */
+        height: 1fr;
+        overflow-x: hidden;
     }
     DataTable > .datatable--cursor { background: #2a2a33; }
     #counts { color: #888898; padding: 0 1; }
@@ -910,6 +916,7 @@ class WatcherApp(App):
         self._sessions: list[dict] = []
         self._inotify_fd = -1
         self._watched_session_dirs: set[str] = set()
+        self._last_sig: tuple | None = None  # structure du tableau au dernier rendu
         self._latest_version: str | None = None
         self._update_state = 'checking'  # checking | ok | old | unknown
 
@@ -1006,22 +1013,28 @@ class WatcherApp(App):
                 prior_pid = int(rk.value) if rk.value else None
             except Exception:
                 prior_pid = None
+        # Préserve aussi l'OFFSET de scroll : table.clear() le remet à 0, et comme
+        # le refresh tourne chaque seconde, scroller à la molette (sans bouger le
+        # curseur) sautait en haut à chaque tick. On le restaure après repeuplement.
+        prior_scroll_y = table.scroll_offset.y
 
         # Largeurs adaptatives : la colonne projet prend tout l'espace dispo → on
         # peut afficher un chemin plus long (tronqué par la gauche, fin prioritaire).
         avail = table.size.width or self.size.width or 80
-        proj_w = max(20, avail - self.STATUS_W - 4)  # -4 : gutter curseur + padding cellules
+        # -6 : gutter curseur + padding cellules + barre de défilement verticale.
+        # Sans réserver la barre, proj_w + STATUS_W dépasse d'1-2 colonnes et la
+        # colonne d'état (droite) se fait rogner (« travaill », « atten »).
+        proj_w = max(20, avail - self.STATUS_W - 6)
         path_chars = max(8, proj_w - 2)              # -2 : préfixe "● " ligne 1
         # Hauteur calculée par ligne : base 2 (● chemin + pid·durée), +1 si un sujet
         # est affiché, +1 en mode cartes (ligne vide de séparation).
 
-        table.clear(columns=True)
-        table.add_column("", width=proj_w, key="session")
-        table.add_column("", width=self.STATUS_W, key="status")
-
+        # On construit toutes les lignes EN MÉMOIRE d'abord, pour décider ensuite
+        # entre mise à jour en place et reconstruction (cf. signature plus bas).
         waiting = working = 0
         target_row = 0
         row_tips: dict[str, Text] = {}  # str(pid) → infobulle (chemin + sujet complets)
+        built: list[tuple[str, Text, Text, int]] = []  # (clé, cellule gauche, droite, hauteur)
         for i, s in enumerate(sessions):
             color, badge = session_state_label(s)
             if s['waiting']:
@@ -1072,11 +1085,10 @@ class WatcherApp(App):
             # un sujet retombé sur lastPrompt peut contenir des crochets ('[/]',
             # '[INST]'…) → MarkupError ou texte mangé. Text neutralise le markup.
             full_topic = (s.get('topic') or '').strip()
-            row_tips[str(s['pid'])] = Text(
+            key = str(s['pid'])
+            row_tips[key] = Text(
                 f"{s['cwd']}\n\nTopic: {full_topic}" if full_topic else s['cwd'])
-
-            # key=str(pid) : retrouve la session au clic et restaure le curseur au refresh.
-            table.add_row(sess, st, height=row_h, key=str(s['pid']))
+            built.append((key, sess, st, row_h))
             if s['pid'] == prior_pid:
                 target_row = i
 
@@ -1084,8 +1096,31 @@ class WatcherApp(App):
         has_rows = bool(sessions)
         table.display = has_rows
         empty.display = not has_rows
-        if has_rows:
-            table.move_cursor(row=min(target_row, table.row_count - 1))
+
+        # Signature de STRUCTURE : largeurs + clés ordonnées + hauteurs. Si elle est
+        # inchangée (seul le texte des cellules bouge : durée, ctx%…), on met à jour
+        # les cellules EN PLACE — pas de table.clear(), donc aucun clignotement ni
+        # saut de scroll, curseur et offset intacts. Le clear()+repeuplement complet
+        # (qui clignote à chaque tick) n'a lieu que sur un vrai changement de
+        # structure : ajout/retrait/réordre de session, hauteur de ligne, largeur.
+        sig = (proj_w, self.STATUS_W, tuple((k, h) for k, _g, _d, h in built))
+        if sig == self._last_sig and table.row_count == len(built):
+            for key, sess, st, _h in built:
+                table.update_cell(key, "session", sess, update_width=False)
+                table.update_cell(key, "status",  st,   update_width=False)
+        else:
+            self._last_sig = sig
+            table.clear(columns=True)
+            table.add_column("", width=proj_w, key="session")
+            table.add_column("", width=self.STATUS_W, key="status")
+            for key, sess, st, row_h in built:
+                table.add_row(sess, st, height=row_h, key=key)
+            if has_rows:
+                # scroll=False : repositionner le curseur sans déplacer la vue
+                # (un curseur resté en haut rescrollerait en haut) ; puis restaurer
+                # l'offset après layout (virtual_size à jour → clamp correct).
+                table.move_cursor(row=min(target_row, table.row_count - 1), scroll=False)
+                self.call_after_refresh(table.scroll_to, None, prior_scroll_y, animate=False)
 
         self.query_one("#counts", Static).update(
             tr('count').format(w=waiting, p=working, t=len(sessions))
