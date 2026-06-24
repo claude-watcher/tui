@@ -4,6 +4,10 @@
 
 A terminal UI (Textual) that monitors all running Claude Code sessions on your machine in a live table — keyboard-driven, runs anywhere a terminal does.
 
+<p align="center">
+  <img src="doc/tui-en.gif" alt="Claude Code Watcher TUI tracking several sessions in a live table and toggling the cards layout" width="800">
+</p>
+
 ## Features
 
 - Detects all active Claude Code sessions automatically
@@ -14,6 +18,7 @@ A terminal UI (Textual) that monitors all running Claude Code sessions on your m
 - Context window usage (`ctx%`) shown when available
 - Press `Enter` or click a row to focus the session's terminal window
 - Cards mode (`c`) for a more spacious layout
+- Header shows the installed version with an update indicator (green = up to date, red = a newer release is available)
 - Language auto-detected from system locale (`fr` / `en`)
 
 ## Requirements
@@ -31,7 +36,7 @@ curl -fsSL https://github.com/claude-watcher/tui/releases/latest/download/instal
 Pin a specific version instead of the latest:
 
 ```bash
-curl -fsSL https://github.com/claude-watcher/tui/releases/download/v1.5.1/install.sh | bash
+curl -fsSL https://github.com/claude-watcher/tui/releases/download/v1.3.1/install.sh | bash
 ```
 
 To **upgrade**, just re-run the `latest` one-liner.
@@ -76,6 +81,8 @@ uv run ~/.local/bin/claude-watcher-tui
 | `Enter` / click | Focus session's terminal |
 | `r` | Refresh now |
 | `c` | Toggle cards layout |
+| `t` | Toggle the per-session topic line |
+| `a` | About / update info |
 | `q` | Quit |
 
 ### CLI flags

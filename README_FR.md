@@ -4,6 +4,10 @@
 
 Une interface terminal (Textual) qui surveille toutes les sessions Claude Code actives sur la machine dans un tableau en temps réel — entièrement au clavier, fonctionne dans n'importe quel terminal.
 
+<p align="center">
+  <img src="doc/tui-fr.gif" alt="La TUI Claude Code Watcher suit plusieurs sessions dans un tableau en temps réel et bascule en mode cartes" width="800">
+</p>
+
 ## Fonctionnalités
 
 - Détecte automatiquement toutes les sessions Claude Code actives
@@ -14,6 +18,7 @@ Une interface terminal (Textual) qui surveille toutes les sessions Claude Code a
 - Utilisation du contexte (`ctx%`) affichée si disponible
 - `Entrée` ou clic sur une ligne pour focus le terminal de la session
 - Mode cartes (`c`) pour un affichage plus aéré
+- En-tête affichant la version installée avec un indicateur de mise à jour (vert = à jour, rouge = une nouvelle version disponible)
 - Langue auto-détectée depuis la locale système (`fr` / `en`)
 
 ## Prérequis
@@ -31,7 +36,7 @@ curl -fsSL https://github.com/claude-watcher/tui/releases/latest/download/instal
 Épingler une version précise plutôt que la dernière :
 
 ```bash
-curl -fsSL https://github.com/claude-watcher/tui/releases/download/v1.5.1/install.sh | bash
+curl -fsSL https://github.com/claude-watcher/tui/releases/download/v1.3.1/install.sh | bash
 ```
 
 Pour **monter de version**, relance simplement la commande `latest`.
@@ -76,6 +81,8 @@ uv run ~/.local/bin/claude-watcher-tui
 | `Entrée` / clic | Focus le terminal de la session |
 | `r` | Rafraîchir maintenant |
 | `c` | Basculer le mode cartes |
+| `t` | Afficher/masquer le sujet de session |
+| `a` | À propos / infos de mise à jour |
 | `q` | Quitter |
 
 ### Options CLI
