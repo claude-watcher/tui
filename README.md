@@ -88,6 +88,7 @@ uv run ~/.local/bin/claude-watcher-tui
 | `h` | Toggle the hover tooltip |
 | `s` | Toggle sort: default ↔ by idle time |
 | `i` | Cycle idle duration: hidden → approx → precise |
+| `k` | Close the selected session (idle only) — confirm, then sends `SIGTERM` |
 | `a` | About / update info |
 | `q` | Quit |
 

@@ -88,6 +88,7 @@ uv run ~/.local/bin/claude-watcher-tui
 | `h` | Afficher/masquer l'infobulle de survol |
 | `s` | Tri : par défaut ↔ par inactivité |
 | `i` | Durée d'inactivité : masquée → approx. → précise |
+| `k` | Fermer la session sélectionnée (inactive uniquement) — confirmation, puis `SIGTERM` |
 | `a` | À propos / infos de mise à jour |
 | `q` | Quitter |
 
