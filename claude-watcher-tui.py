@@ -218,6 +218,20 @@ STRINGS = {
         'kill_failed':      'Échec : process introuvable ou déjà terminé.',
         'confirm':          'Confirmer',
         'cancel':           'Annuler',
+        'config_title':     'Paramètres',
+        'config_hint':      'Modifs appliquées et enregistrées aussitôt · (esc) Fermer',
+        'cfg_lang':         'Langue',
+        'cfg_cards':        'Cartes',
+        'cfg_topic':        'Sujet',
+        'cfg_hover':        'Infobulle',
+        'cfg_sort':         'Tri',
+        'cfg_idle':         'Durée d’inactivité',
+        'cfg_lang_d':       'Langue de l’interface.',
+        'cfg_cards_d':      'Ligne vide entre les sessions (affichage plus aéré).',
+        'cfg_topic_d':      'Affiche le sujet (titre IA) sous chaque session.',
+        'cfg_hover_d':      'Infobulle au survol : chemin et sujet complets.',
+        'cfg_sort_d':       'Ordre : par projet, ou par inactivité (récents en tête).',
+        'cfg_idle_d':       'Durée d’inactivité affichée sur les lignes idle.',
     },
     'en': {
         'title':      'CLAUDE CODE WATCHER',
@@ -263,6 +277,20 @@ STRINGS = {
         'kill_failed':      'Failed: process gone or already exited.',
         'confirm':          'Confirm',
         'cancel':           'Cancel',
+        'config_title':     'Settings',
+        'config_hint':      'Changes apply and save instantly · (esc) Close',
+        'cfg_lang':         'Language',
+        'cfg_cards':        'Cards',
+        'cfg_topic':        'Topic',
+        'cfg_hover':        'Tooltip',
+        'cfg_sort':         'Sort',
+        'cfg_idle':         'Idle duration',
+        'cfg_lang_d':       'Interface language.',
+        'cfg_cards_d':      'Blank line between sessions (more spacing).',
+        'cfg_topic_d':      'Show the topic (AI title) under each session.',
+        'cfg_hover_d':      'Hover tooltip: full path and topic.',
+        'cfg_sort_d':       'Order: by project, or by idle time (recent first).',
+        'cfg_idle_d':       'Idle duration shown on idle rows.',
     },
 }
 
@@ -942,11 +970,12 @@ def path_display(cwd: str | None, max_chars: int) -> str:
 from rich.text import Text  # noqa: E402
 
 from textual.app import App, ComposeResult  # noqa: E402
-from textual.containers import Center, Vertical  # noqa: E402
+from textual.binding import Binding  # noqa: E402
+from textual.containers import Center, Horizontal, Vertical  # noqa: E402
 from textual.content import Content  # noqa: E402
 from textual.coordinate import Coordinate  # noqa: E402
 from textual.screen import ModalScreen  # noqa: E402
-from textual.widgets import DataTable, Footer, Header, Static  # noqa: E402
+from textual.widgets import DataTable, Footer, Header, Label, Select, Static, Switch  # noqa: E402
 
 
 class SessionTable(DataTable):
@@ -1084,9 +1113,169 @@ class ConfirmKillScreen(ModalScreen[bool]):
         self.dismiss(False)
 
 
+class _NavSelect(Select):
+    """Select qui n'ouvre QUE sur Entrée/Espace.
+
+    Le Select natif lie aussi haut/bas à l'ouverture du menu (`show_overlay`), si
+    bien qu'une flèche Bas changeait la valeur au lieu de naviguer. On retire
+    haut/bas : elles remontent alors à ConfigScreen qui déplace le focus entre les
+    réglages. Une fois le menu ouvert, c'est l'overlay (focalisé) qui reprend les
+    flèches pour choisir la valeur, puis Entrée valide / Échap ferme.
+    """
+
+    # Textual FUSIONNE les BINDINGS de la hiérarchie : pour neutraliser le
+    # haut/bas hérité (→ show_overlay), il faut les RÉASSIGNER ici. On les mappe
+    # vers la navigation de focus (comme le fait ConfigScreen pour les Switch).
+    BINDINGS = [
+        Binding("enter,space", "show_overlay", "Show menu", show=False),
+        Binding("down", "nav_next", show=False),
+        Binding("up", "nav_prev", show=False),
+    ]
+
+    def action_nav_next(self) -> None:
+        self.screen.focus_next()
+
+    def action_nav_prev(self) -> None:
+        self.screen.focus_previous()
+
+
+class ConfigScreen(ModalScreen):
+    """Fenêtre de réglages (langue + affichage). Pendant des touches de bascule
+    et du dialogue Réglages du widget GTK. Chaque changement est appliqué et
+    persisté DANS LA FOULÉE (config.ini, partagé avec le GTK) — pas de bouton OK.
+    Les raccourcis c/t/h/s/i restent dispo en parallèle.
+
+    Navigation : flèches haut/bas = passer d'un réglage à l'autre ; Entrée/Espace
+    = activer (ouvrir un menu / basculer un switch). Tab fonctionne aussi.
+    """
+
+    # Panneau ancré EN BAS + fond transparent (pas de voile assombri) : le tableau
+    # reste visible AU-DESSUS et se met à jour en direct quand on change un réglage
+    # (refresh_sessions sur l'app de base) — on voit l'effet sans fermer la fenêtre.
+    CSS = """
+    ConfigScreen { align: center top; background: transparent; }
+    #config-box {
+        width: 70; max-width: 95%; height: auto; margin-top: 1;
+        padding: 1 2; background: #1a1a22; border: round #3a3a4a;
+    }
+    #config-box > Static { margin-bottom: 1; }
+    .cfg-item { height: auto; }
+    .cfg-head { height: 3; }
+    .cfg-head > Label { width: 1fr; content-align: left middle; height: 100%; }
+    .cfg-head > Select { width: 24; }
+    .cfg-desc { color: #888898; margin-bottom: 1; }
+    """
+
+    BINDINGS = [
+        ("escape,p,q", "close", "Close"),
+        Binding("down", "focus_next", "Next field", show=False),
+        Binding("up", "focus_previous", "Previous field", show=False),
+    ]
+
+    def action_focus_next(self) -> None:
+        self.focus_next()
+
+    def action_focus_previous(self) -> None:
+        self.focus_previous()
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="config-box"):
+            yield Static(f"[b]{tr('config_title')}[/b]")
+            with Vertical(classes="cfg-item"):
+                with Horizontal(classes="cfg-head"):
+                    yield Label(tr('cfg_lang'))
+                    yield _NavSelect([("Français", "fr"), ("English", "en")],
+                                     value=getattr(CFG, 'lang', 'en'),
+                                     allow_blank=False, id="cfg-lang")
+                yield Static(tr('cfg_lang_d'), classes="cfg-desc")
+            with Vertical(classes="cfg-item"):
+                with Horizontal(classes="cfg-head"):
+                    yield Label(f"{tr('cfg_cards')}  [dim](c)[/dim]")
+                    yield Switch(value=self.app._carded, id="cfg-cards")
+                yield Static(tr('cfg_cards_d'), classes="cfg-desc")
+            with Vertical(classes="cfg-item"):
+                with Horizontal(classes="cfg-head"):
+                    yield Label(f"{tr('cfg_topic')}  [dim](t)[/dim]")
+                    yield Switch(value=getattr(CFG, 'show_topic', True), id="cfg-topic")
+                yield Static(tr('cfg_topic_d'), classes="cfg-desc")
+            with Vertical(classes="cfg-item"):
+                with Horizontal(classes="cfg-head"):
+                    yield Label(f"{tr('cfg_hover')}  [dim](h)[/dim]")
+                    yield Switch(value=getattr(CFG, 'hover', True), id="cfg-hover")
+                yield Static(tr('cfg_hover_d'), classes="cfg-desc")
+            with Vertical(classes="cfg-item"):
+                with Horizontal(classes="cfg-head"):
+                    yield Label(f"{tr('cfg_sort')}  [dim](s)[/dim]")
+                    yield _NavSelect([(tr('sort_default'), 'default'), (tr('sort_idle'), 'idle')],
+                                     value=getattr(CFG, 'sort_mode', 'default'),
+                                     allow_blank=False, id="cfg-sort")
+                yield Static(tr('cfg_sort_d'), classes="cfg-desc")
+            with Vertical(classes="cfg-item"):
+                with Horizontal(classes="cfg-head"):
+                    yield Label(f"{tr('cfg_idle')}  [dim](i)[/dim]")
+                    yield _NavSelect([(tr('idle_none'), 'none'), (tr('idle_loose'), 'loose'),
+                                      (tr('idle_precise'), 'precise')],
+                                     value=getattr(CFG, 'idle_format', 'none'),
+                                     allow_blank=False, id="cfg-idle")
+                yield Static(tr('cfg_idle_d'), classes="cfg-desc")
+            yield Static(f"[dim]{tr('config_hint')}[/dim]")
+
+    def on_switch_changed(self, event: Switch.Changed) -> None:
+        val = event.value
+        if event.switch.id == "cfg-cards":
+            self.app._carded = val
+            save_config({'display': {'cards': 'true' if val else 'false'}})
+        elif event.switch.id == "cfg-topic":
+            CFG.show_topic = val
+            save_config({'features': {'show_topic': 'true' if val else 'false'}})
+        elif event.switch.id == "cfg-hover":
+            CFG.hover = val
+            if not val:
+                self.app.query_one("#sessions", DataTable).tooltip = None
+            save_config({'features': {'hover': 'true' if val else 'false'}})
+        self.app.refresh_sessions()
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        val = event.value
+        if val is Select.BLANK:
+            return
+        if event.select.id == "cfg-lang":
+            CFG.lang = val
+            save_config({'general': {'lang': val}})
+        elif event.select.id == "cfg-sort":
+            CFG.sort_mode = val
+            save_config({'display': {'sort_mode': val}})
+        elif event.select.id == "cfg-idle":
+            CFG.idle_format = val
+            save_config({'display': {'idle_format': val}})
+        self.app.refresh_sessions()
+
+    def action_close(self) -> None:
+        self.dismiss()
+
+
+class WatcherFooter(Footer):
+    """Footer qui pousse les touches « méta » (p Paramètres, a À propos) à droite.
+
+    Textual n'a pas de marge auto ; on insère un spacer 1fr juste avant la touche
+    'p', ce qui repousse 'p' et tout ce qui suit ('a') contre le bord droit, en
+    laissant les actions de navigation (q/k/Focus) à gauche. Survit aux
+    recompositions du footer (refait à chaque changement d'écran).
+    """
+
+    def compose(self) -> ComposeResult:
+        injected = False
+        for widget in super().compose():
+            if not injected and getattr(widget, "key", None) == "p":
+                yield Static("", classes="footer-spacer")
+                injected = True
+            yield widget
+
+
 class WatcherApp(App):
     CSS = """
     Screen { background: #121214; }
+    .footer-spacer { width: 1fr; height: 1; }
     #empty {
         color: #55556a;
         text-style: italic;
@@ -1106,16 +1295,21 @@ class WatcherApp(App):
     #counts { color: #888898; padding: 0 1; }
     """
 
+    # Footer : actions principales visibles. Les bascules d'affichage (c/t/h/s/i)
+    # restent ACTIVES mais masquées (show=False) — la fenêtre Paramètres ('p') est
+    # désormais l'UI principale pour les régler (+ la langue). Pas de 'refresh' :
+    # l'inotify + le polling rafraîchissent déjà en continu, un refresh manuel ne
+    # servait à rien.
     BINDINGS = [
         ("q", "quit", "Quit"),
-        ("r", "refresh", "Refresh"),
-        ("c", "toggle_cards", "Cards"),
-        ("t", "toggle_topic", "Topic"),
-        ("h", "toggle_hover", "Hover"),
-        ("s", "toggle_sort", "Sort"),
-        ("i", "cycle_idle", "Idle"),
+        Binding("c", "toggle_cards", "Cards", show=False),
+        Binding("t", "toggle_topic", "Topic", show=False),
+        Binding("h", "toggle_hover", "Hover", show=False),
+        Binding("s", "toggle_sort", "Sort", show=False),
+        Binding("i", "cycle_idle", "Idle", show=False),
         ("k", "kill_session", "Kill"),
         ("enter", "focus_session", "Focus terminal"),
+        ("p", "config", "Parameters"),
         ("a", "about", "About"),
     ]
 
@@ -1140,7 +1334,7 @@ class WatcherApp(App):
         yield SessionTable(id="sessions", cursor_type="row", zebra_stripes=False,
                            show_header=False)
         yield Center(Static(tr('no_session'), id="empty"))
-        yield Footer()
+        yield WatcherFooter()
 
     def on_mount(self) -> None:
         self.title = tr('title')
@@ -1436,8 +1630,8 @@ class WatcherApp(App):
 
         self.push_screen(ConfirmKillScreen(prompt), _on_confirm)
 
-    def action_refresh(self) -> None:
-        self.refresh_sessions()
+    def action_config(self) -> None:
+        self.push_screen(ConfigScreen())
 
     def action_toggle_cards(self) -> None:
         self._carded = not self._carded

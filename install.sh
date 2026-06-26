@@ -13,7 +13,9 @@ set -euo pipefail
 #
 # Env overrides (handy for piped / unattended installs):
 #   CW_VERSION=v1.5.1   pin a version
-#   CW_LANG=fr|en       set language without the interactive prompt
+#
+# Language is auto-detected from the system locale and editable afterwards in
+# ~/.config/claude-watcher/config.ini ([general] lang = fr|en) — no prompt.
 
 readonly REPO="claude-watcher/tui"
 readonly SCRIPT_NAME="claude-watcher-tui.py"
@@ -81,24 +83,6 @@ else
     echo "  source: release ${VERSION}"
 fi
 
-# ── Language — env, else interactive prompt (only with a real terminal) ───────
-SYS_LANG="${LANG:-}"
-[[ "$SYS_LANG" == fr* ]] && DEFAULT_LANG="fr" || DEFAULT_LANG="en"
-CHOSEN_LANG="${CW_LANG:-}"
-
-if [[ -z "$CHOSEN_LANG" && -e /dev/tty ]]; then
-    if [[ "$DEFAULT_LANG" == "fr" ]]; then
-        read -rp "Language / Langue [FR/en]: " LANG_INPUT < /dev/tty || LANG_INPUT=""
-    else
-        read -rp "Language / Langue [EN/fr]: " LANG_INPUT < /dev/tty || LANG_INPUT=""
-    fi
-    case "${LANG_INPUT,,}" in
-        fr) CHOSEN_LANG="fr" ;;
-        en) CHOSEN_LANG="en" ;;
-        *)  CHOSEN_LANG="$DEFAULT_LANG" ;;
-    esac
-fi
-CHOSEN_LANG="${CHOSEN_LANG:-$DEFAULT_LANG}"
 echo ""
 
 # ── 1. Dependencies ───────────────────────────────────────────────────────────
@@ -124,14 +108,14 @@ echo "  ~/.local/bin/claude-watcher-tui"
 echo -e "${CYAN}[3/3] Config...${RESET}"
 mkdir -p "$HOME/.config/claude-watcher"
 if [[ ! -f "$HOME/.config/claude-watcher/config.ini" ]]; then
-    cat > "$HOME/.config/claude-watcher/config.ini" << EOF
+    cat > "$HOME/.config/claude-watcher/config.ini" << 'EOF'
 [general]
-lang = ${CHOSEN_LANG}
+# lang = fr   # fr | en — auto-detected from the system locale if omitted
 
 [display]
 # refresh_ms = 2000
 EOF
-    echo "  ~/.config/claude-watcher/config.ini (lang=${CHOSEN_LANG})"
+    echo "  ~/.config/claude-watcher/config.ini"
 else
     echo "  ~/.config/claude-watcher/config.ini (already exists, skipped)"
 fi
