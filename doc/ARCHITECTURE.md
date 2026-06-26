@@ -110,6 +110,17 @@ Terminal focus on Wayland is limited — cross-application window management is
 restricted by Wayland's security model. Kitty with `allow_remote_control` works
 on the same workspace only; XWayland terminals (e.g. xterm) work everywhere.
 
+## Closing a session
+
+`k` on the selected row closes the session: it opens a `ConfirmKillScreen` modal
+and, on confirm, sends `SIGTERM` to the `claude` PID (clean exit, transcript
+flushed; never `SIGKILL`). The terminal itself stays open. Only **idle** rows are
+killable — `k` on a working/waiting session just warns, to avoid interrupting a
+turn in progress. The kill is gated by the same anti-PID-reuse guard used for
+state: `kill_session` only fires if `get_session_registry(pid, starttime)` still
+resolves (i.e. `procStart` matches), so a recycled PID is never signalled. The
+row disappears on the next scan once the process is gone.
+
 ## Known limitations
 
 - Terminal focus on Wayland is limited — same restrictions as the GTK widget.

@@ -26,6 +26,7 @@ import ctypes.util
 import json
 import os
 import re
+import signal
 import subprocess
 import time
 import urllib.request
@@ -210,6 +211,13 @@ STRINGS = {
         'hover_label':   'Infobulle',
         'on':            'activée',
         'off':           'désactivée',
+        'kill_label':       'Fermer la session',
+        'kill_confirm':     'Fermer « {proj} » (inactive depuis {idle}) ? Le terminal reste ouvert.',
+        'kill_only_idle':   'Seules les sessions inactives peuvent être fermées.',
+        'kill_ok':          'Session fermée : {proj} (pid {pid})',
+        'kill_failed':      'Échec : process introuvable ou déjà terminé.',
+        'confirm':          'Confirmer',
+        'cancel':           'Annuler',
     },
     'en': {
         'title':      'CLAUDE CODE WATCHER',
@@ -248,6 +256,13 @@ STRINGS = {
         'hover_label':   'Tooltip',
         'on':            'on',
         'off':           'off',
+        'kill_label':       'Close session',
+        'kill_confirm':     'Close “{proj}” (idle for {idle})? The terminal stays open.',
+        'kill_only_idle':   'Only idle sessions can be closed.',
+        'kill_ok':          'Session closed: {proj} (pid {pid})',
+        'kill_failed':      'Failed: process gone or already exited.',
+        'confirm':          'Confirm',
+        'cancel':           'Cancel',
     },
 }
 
@@ -660,6 +675,24 @@ def get_session_registry(pid: int, starttime: int,
     return data
 
 
+def kill_session(pid: int, starttime: int, config_dir: str | None = None) -> bool:
+    """Ferme une session Claude via SIGTERM, avec garde anti-recyclage de PID.
+
+    Réutilise get_session_registry, qui ne renvoie le registre QUE si procStart
+    == starttime : un None ici = process disparu ou PID recyclé entre le scan et
+    la touche → on ne tire pas (pas d'innocent tué). SIGTERM laisse Claude flusher
+    son transcript et sortir proprement (pas de SIGKILL). Retourne True si le
+    signal est parti.
+    """
+    if get_session_registry(pid, starttime, config_dir) is None:
+        return False
+    try:
+        os.kill(pid, signal.SIGTERM)
+        return True
+    except OSError:
+        return False
+
+
 def get_session_state(pid: int, cwd: str | None,
                       starttime: int = 0,
                       config_dir: str | None = None) -> tuple[str, int | None, str | None, str | None, float | None]:
@@ -832,6 +865,7 @@ def scan_sessions() -> list[dict]:
         confirmed_wt = wt_name is not None and last_activity is not None
         sessions.append({
             'pid':             pid,
+            'starttime':       p['starttime'],
             'project':         project_label(wt_root if confirmed_wt else cwd),
             'worktree':        wt_name if confirmed_wt else None,
             # Chemin affiché (racine projet si worktree) ; 'cwd' garde le chemin
@@ -1016,6 +1050,40 @@ class AboutScreen(ModalScreen):
         self.app.notify(tr('copied'), severity="information", timeout=2)
 
 
+class ConfirmKillScreen(ModalScreen[bool]):
+    """Modale de confirmation avant de fermer une session. dismiss(True) = go."""
+
+    CSS = """
+    ConfirmKillScreen { align: center middle; }
+    #kill-box {
+        width: 64; max-width: 90%; height: auto;
+        padding: 1 2; background: #1a1a22; border: round #d08770;
+    }
+    #kill-box > Static { margin-bottom: 1; }
+    """
+
+    BINDINGS = [
+        ("escape,n", "cancel", "Cancel"),
+        ("enter,y", "confirm", "Confirm"),
+    ]
+
+    def __init__(self, prompt: str) -> None:
+        super().__init__()
+        self._prompt = prompt
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="kill-box"):
+            yield Static(f"[b]{tr('kill_label')} ?[/b]")
+            yield Static(self._prompt)
+            yield Static(f"[dim](y / ⏎) {tr('confirm')}  ·  (n / esc) {tr('cancel')}[/dim]")
+
+    def action_confirm(self) -> None:
+        self.dismiss(True)
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
+
 class WatcherApp(App):
     CSS = """
     Screen { background: #121214; }
@@ -1046,6 +1114,7 @@ class WatcherApp(App):
         ("h", "toggle_hover", "Hover"),
         ("s", "toggle_sort", "Sort"),
         ("i", "cycle_idle", "Idle"),
+        ("k", "kill_session", "Kill"),
         ("enter", "focus_session", "Focus terminal"),
         ("a", "about", "About"),
     ]
@@ -1337,6 +1406,35 @@ class WatcherApp(App):
         table = self.query_one("#sessions", DataTable)
         if table.row_count:
             self._focus_row(table.cursor_row)
+
+    def action_kill_session(self) -> None:
+        table = self.query_one("#sessions", DataTable)
+        if not table.row_count:
+            return
+        row = table.cursor_row
+        if not (0 <= row < len(self._sessions)):
+            return
+        s = self._sessions[row]
+        # Kill réservé aux sessions inactives : on ne ferme pas une session qui
+        # travaille ou attend une réponse (tour en cours).
+        if s['waiting'] or s['working']:
+            self.notify(tr('kill_only_idle'), severity="warning", timeout=2)
+            return
+        la = s.get('last_activity')
+        idle_txt = format_idle(time.time() - la, 'precise') if la is not None else '?'
+        prompt = tr('kill_confirm').format(proj=s['project'], idle=idle_txt)
+
+        def _on_confirm(go: bool | None) -> None:
+            if not go:
+                return
+            if kill_session(s['pid'], s.get('starttime', 0), s.get('config_dir')):
+                self.notify(tr('kill_ok').format(proj=s['project'], pid=s['pid']),
+                            severity="information", timeout=2)
+                self.refresh_sessions()  # la ligne part dès le prochain scan
+            else:
+                self.notify(tr('kill_failed'), severity="error", timeout=3)
+
+        self.push_screen(ConfirmKillScreen(prompt), _on_confirm)
 
     def action_refresh(self) -> None:
         self.refresh_sessions()
