@@ -99,10 +99,15 @@ def load_config() -> dict:
     d = cfg['display']  if 'display'  in cfg else {}
     g = cfg['general']  if 'general'  in cfg else {}
     f = cfg['features'] if 'features' in cfg else {}
+    idle_fmt = d.get('idle_format', 'none').lower()
     return {
         'lang':       g.get('lang', _detect_lang()),
         'refresh_ms': int(d.get('refresh_ms', 2000)),
         'show_topic': f.get('show_topic', 'true').lower() == 'true',
+        # Tri : 'default' (alpha) ou 'idle' (par ancienneté d'inactivité). Format
+        # de la durée d'inactivité affichée : 'none' (off), 'loose' (~Xm), 'precise'.
+        'sort_mode':  'idle' if d.get('sort_mode', 'default').lower() == 'idle' else 'default',
+        'idle_format': idle_fmt if idle_fmt in ('none', 'loose', 'precise') else 'none',
     }
 
 
@@ -117,6 +122,13 @@ def parse_args(defaults: dict, argv: list[str] | None = None) -> argparse.Namesp
     p.add_argument('--no-topic', dest='show_topic', action='store_false',
                    default=defaults['show_topic'],
                    help="masque le sujet de session (titre IA) sous chaque ligne.")
+    p.add_argument('--sort', dest='sort_mode', default=defaults['sort_mode'],
+                   choices=['default', 'idle'],
+                   help="ordre de tri (défaut: default). Bascule à la volée avec 's'.")
+    p.add_argument('--idle-format', dest='idle_format', default=defaults['idle_format'],
+                   choices=['none', 'loose', 'precise'],
+                   help="durée d'inactivité affichée sur les lignes idle (défaut: none). "
+                        "Cycle à la volée avec 'i'.")
     p.add_argument('--once', action='store_true',
                    help="affiche les sessions une fois en texte brut puis quitte (non-TTY / debug).")
     p.add_argument('--frame', action='store_true',
@@ -161,6 +173,13 @@ STRINGS = {
         'authors':       'Auteurs',
         'update_cmd':    'Commande de mise à jour',
         'update_notif':  'Mise à jour disponible : v{v} — appuyez sur « a »',
+        'sort_label':    'Tri',
+        'sort_default':  'par défaut',
+        'sort_idle':     'par inactivité',
+        'idle_label':    'Durée d’inactivité',
+        'idle_none':     'masquée',
+        'idle_loose':    'approx.',
+        'idle_precise':  'précise',
     },
     'en': {
         'title':      'CLAUDE CODE WATCHER',
@@ -189,6 +208,13 @@ STRINGS = {
         'authors':       'Authors',
         'update_cmd':    'Update command',
         'update_notif':  'Update available: v{v} — press "a"',
+        'sort_label':    'Sort',
+        'sort_default':  'default',
+        'sort_idle':     'by idle time',
+        'idle_label':    'Idle duration',
+        'idle_none':     'hidden',
+        'idle_loose':    'approx.',
+        'idle_precise':  'precise',
     },
 }
 
@@ -328,15 +354,34 @@ def find_best_window(term_pid: int | None, cwd: str | None,
     return candidates[0]['wid']
 
 
+_WORKTREE_MARKER = '/.claude/worktrees/'
+
+
+def split_worktree(cwd: str | None) -> tuple[str | None, str | None]:
+    """Sépare un cwd de worktree Claude en (racine projet, nom du worktree).
+
+    <projet>/.claude/worktrees/<nom>[/sous-dossier] → (<projet>, <nom>).
+    Hors worktree → (cwd, None). C'est la source unique du marqueur worktree.
+    """
+    if cwd and _WORKTREE_MARKER in cwd:
+        root, _, rest = cwd.partition(_WORKTREE_MARKER)
+        return root, rest.split('/', 1)[0]
+    return cwd, None
+
+
 def cwd_to_project_dir(cwd: str | None, config_dir: str | None = None) -> Path | None:
     if not cwd:
         return None
     # Instance CLAUDE_CONFIG_DIR custom → ses JSONL vivent dans <config_dir>/projects,
     # pas dans ~/.claude/projects. Sinon état/contexte lus au mauvais endroit.
     base = Path(config_dir) / 'projects' if config_dir else CLAUDE_PROJECTS_DIR
+    # Worktree Claude : Claude range le transcript sous le slug du PROJET PARENT,
+    # pas du cwd du worktree. On retombe sur la racine projet. Inoffensif hors
+    # worktree ; au pire le dir n'existe pas → None.
+    root, _ = split_worktree(cwd)
     # Claude slugifie le cwd en remplaçant CHAQUE non-alphanumérique par '-'
     # (pas seulement '/'), donc 'geoffrey.laurent' → 'geoffrey-laurent'.
-    slug = re.sub(r'[^a-zA-Z0-9]', '-', cwd)
+    slug = re.sub(r'[^a-zA-Z0-9]', '-', root or cwd)
     path = base / slug
     return path if path.exists() else None
 
@@ -493,18 +538,20 @@ def get_session_info_from_jsonl(
     cwd: str | None,
     config_dir: str | None = None,
     session_id: str | None = None,
-) -> tuple[str | None, int | None, str | None, str | None]:
-    """État + % de contexte + outil courant + topic depuis le JSONL de la session.
+) -> tuple[str | None, int | None, str | None, str | None, float | None]:
+    """État + % de contexte + outil courant + topic + mtime du JSONL.
 
-    Retourne (state, context_pct, tool, topic). `state` ne sert qu'en fallback
-    (registre absent) ; `topic` = titre IA, sinon dernier prompt. Si `session_id`
+    Retourne (state, context_pct, tool, topic, mtime). `state` ne sert qu'en
+    fallback (registre absent) ; `topic` = titre IA, sinon dernier prompt ;
+    `mtime` = dernière activité (proxy « inactif depuis »), None si introuvable.
+    Si `session_id`
     est fourni, cible directement <session_id>.jsonl (chemin exact, aucun
     devinage) ; sinon le .jsonl le plus récent du projet. Court-circuit par mtime
     + lecture du seul tail (relecture complète si besoin).
     """
     project_dir = cwd_to_project_dir(cwd, config_dir)
     if not project_dir:
-        return None, None, None, None
+        return None, None, None, None, None
     latest = None
     if session_id:
         cand = project_dir / f'{session_id}.jsonl'
@@ -513,18 +560,18 @@ def get_session_info_from_jsonl(
     if latest is None:
         jsonl_files = [f for f in project_dir.glob('*.jsonl') if f.is_file()]
         if not jsonl_files:
-            return None, None, None, None
+            return None, None, None, None, None
         try:
             latest, _ = max(
                 ((f, f.stat().st_mtime) for f in jsonl_files),
                 key=lambda x: x[1],
             )
         except (OSError, ValueError):
-            return None, None, None, None
+            return None, None, None, None, None
     try:
         mtime = latest.stat().st_mtime
     except OSError:
-        return None, None, None, None
+        return None, None, None, None, None
     key = str(latest)
     cached = _JSONL_CACHE.get(key)
     if cached and cached[0] == mtime:
@@ -549,7 +596,7 @@ def get_session_info_from_jsonl(
         topic = title or last_prompt
     else:
         topic = None
-    return result[0], result[1], result[2], topic
+    return result[0], result[1], result[2], topic, mtime
 
 
 def get_session_registry(pid: int, starttime: int,
@@ -582,8 +629,8 @@ def get_session_registry(pid: int, starttime: int,
 
 def get_session_state(pid: int, cwd: str | None,
                       starttime: int = 0,
-                      config_dir: str | None = None) -> tuple[str, int | None, str | None, str | None]:
-    """État de la session. Retourne (state, context_pct, tool, topic).
+                      config_dir: str | None = None) -> tuple[str, int | None, str | None, str | None, float | None]:
+    """État de la session. Retourne (state, context_pct, tool, topic, last_activity).
 
     Le registre ~/.claude/sessions/<pid>.json (champ `status`) est prioritaire
     quand il existe ; selon la version de Claude Code il peut être absent,
@@ -595,7 +642,8 @@ def get_session_state(pid: int, cwd: str | None,
     session_id = reg.get('sessionId') if reg else None
     if reg and not cwd:
         cwd = reg.get('cwd')
-    jsonl_state, context_pct, tool, topic = get_session_info_from_jsonl(cwd, config_dir, session_id)
+    jsonl_state, context_pct, tool, topic, last_activity = get_session_info_from_jsonl(
+        cwd, config_dir, session_id)
     if reg:
         status = reg.get('status', '')
         state = _STATUS_MAP.get(status, 'idle')
@@ -611,7 +659,7 @@ def get_session_state(pid: int, cwd: str | None,
             state = jsonl_state
     else:
         state = jsonl_state or 'idle'
-    return state, context_pct, tool, topic
+    return state, context_pct, tool, topic, last_activity
 
 
 def format_elapsed(s) -> str:
@@ -619,6 +667,22 @@ def format_elapsed(s) -> str:
     if s < 60:   return f"{s}s"
     if s < 3600: return f"{s//60}m{s%60:02d}s"
     return f"{s//3600}h{(s%3600)//60:02d}m"
+
+
+def format_idle(secs, mode: str) -> str:
+    """Durée d'inactivité formatée. mode='loose' (~Xm approx) ou 'precise' ([Nd ]HH:MM:SS)."""
+    s = max(0, int(secs))
+    if mode == 'precise':
+        d, rem = divmod(s, 86400)
+        h, rem = divmod(rem, 3600)
+        m, sec = divmod(rem, 60)
+        clock = f'{h:02d}:{m:02d}:{sec:02d}'
+        return f'{d}d {clock}' if d else clock
+    # loose : unité la plus significative, préfixée d'un ~ (approximatif)
+    if s < 60:    return f'~{s}s'
+    if s < 3600:  return f'~{s//60}m'
+    if s < 86400: return f'~{s//3600}h'
+    return f'~{s//86400}d'
 
 
 def project_label(cwd: str | None) -> str:
@@ -714,10 +778,22 @@ def scan_sessions() -> list[dict]:
             config_dir = os.path.expanduser(config_dir)
             if not os.path.isabs(config_dir):
                 config_dir = None
-        state, context_pct, tool, topic = get_session_state(pid, cwd, p['starttime'], config_dir)
+        state, context_pct, tool, topic, last_activity = get_session_state(
+            pid, cwd, p['starttime'], config_dir)
+        # Worktree « confirmé » = marqueur détecté ET transcript résolu
+        # (last_activity = mtime du JSONL trouvé). On affiche alors le VRAI projet
+        # (racine parente) + une sous-ligne « ↳ WT: <nom> ». Non confirmé →
+        # comportement inchangé (chemin brut, pas de sous-ligne).
+        wt_root, wt_name = split_worktree(cwd)
+        confirmed_wt = wt_name is not None and last_activity is not None
         sessions.append({
             'pid':             pid,
-            'project':         project_label(cwd),
+            'project':         project_label(wt_root if confirmed_wt else cwd),
+            'worktree':        wt_name if confirmed_wt else None,
+            # Chemin affiché (racine projet si worktree) ; 'cwd' garde le chemin
+            # complet pour l'infobulle.
+            'display_cwd':     (wt_root if confirmed_wt else cwd) or '?',
+            'last_activity':   last_activity,
             'topic':           topic,
             'cwd':             cwd or '?',
             'elapsed':         p['elapsed'],
@@ -731,7 +807,24 @@ def scan_sessions() -> list[dict]:
             'kitty_window_id': kitty_window_id,
             'config_dir':      config_dir,
         })
-    sessions.sort(key=lambda s: (not s['waiting'], not s['working'], s['project'].lower()))
+    # Priorité d'état (attente > travaille > idle) dans tous les modes. En mode
+    # 'idle', SEUL le groupe inactif est départagé par ancienneté d'inactivité
+    # (plus récemment devenu inactif en tête) ; attente/travaille gardent le tri
+    # alpha. Trier les sessions actives par mtime serait instable — leur JSONL
+    # bouge en continu, l'ordre changerait à chaque scan. last_activity absent →
+    # coule en bas du groupe inactif via +inf.
+    if getattr(CFG, 'sort_mode', 'default') == 'idle':
+        now = time.time()
+        def _sort_key(s: dict) -> tuple:
+            if s['waiting']:   bucket = 0
+            elif s['working']: bucket = 1
+            else:              bucket = 2
+            la = s.get('last_activity')
+            idle = ((now - la) if la is not None else float('inf')) if bucket == 2 else 0.0
+            return (bucket, idle, s['project'].lower())
+        sessions.sort(key=_sort_key)
+    else:
+        sessions.sort(key=lambda s: (not s['waiting'], not s['working'], s['project'].lower()))
     return sessions
 
 
@@ -902,6 +995,8 @@ class WatcherApp(App):
         ("r", "refresh", "Refresh"),
         ("c", "toggle_cards", "Cards"),
         ("t", "toggle_topic", "Topic"),
+        ("s", "toggle_sort", "Sort"),
+        ("i", "cycle_idle", "Idle"),
         ("enter", "focus_session", "Focus terminal"),
         ("a", "about", "About"),
     ]
@@ -1045,13 +1140,19 @@ class WatcherApp(App):
             # Cellule gauche : ● + chemin (ligne 1), pid · durée en sourdine (ligne 2).
             sess = Text(no_wrap=True, overflow="ellipsis")
             sess.append("● ", style=color)
-            sess.append(path_display(s['cwd'], path_chars), style="#e2e2e2 bold")
+            sess.append(path_display(s.get('display_cwd') or s['cwd'], path_chars),
+                        style="#e2e2e2 bold")
+            row_h = 2
+            # Sous-ligne worktree « ↳ WT: <nom> » sous le chemin (worktree confirmé).
+            worktree = s.get('worktree')
+            if worktree:
+                sess.append(f"\n  ↳ WT: {worktree}", style=COLOR_CLAUDE)
+                row_h += 1
             sess.append(f"\n  {tr('pid')} {s['pid']} · {format_elapsed(s['elapsed'])}",
                         style=TEXT_DIM2)
             cfg = display_config_dir(s.get('config_dir'))
             if cfg:
                 sess.append(f" {CLAUDE_IDLE_GLYPH}{cfg}", style=COLOR_CLAUDE)
-            row_h = 2
             # Sujet IA (ligne 3) : distingue plusieurs sessions du même cwd.
             topic = (s.get('topic') or '').strip().split('\n', 1)[0]
             if topic:
@@ -1072,6 +1173,12 @@ class WatcherApp(App):
                 meta2_parts.append((f"ctx {pct}%", ctx_color(pct)))
             if tool and (s['working'] or s['waiting']):
                 meta2_parts.append((tool, TEXT_DIM2))
+            elif not s['working'] and not s['waiting']:
+                # Session inactive : durée d'inactivité = now − dernière activité.
+                idle_fmt = getattr(CFG, 'idle_format', 'none')
+                la = s.get('last_activity')
+                if idle_fmt != 'none' and la is not None:
+                    meta2_parts.append((format_idle(time.time() - la, idle_fmt), TEXT_DIM2))
             for idx, (txt, sty) in enumerate(meta2_parts):
                 if idx:
                     st.append(" · ", style=TEXT_DIM2)
@@ -1194,6 +1301,22 @@ class WatcherApp(App):
         CFG.show_topic = not getattr(CFG, 'show_topic', True)
         self.refresh_sessions()
 
+    def action_toggle_sort(self) -> None:
+        # Bascule éphémère default ↔ idle (persistance via config.ini / --sort).
+        new = 'default' if getattr(CFG, 'sort_mode', 'default') == 'idle' else 'idle'
+        CFG.sort_mode = new
+        self.notify(f"{tr('sort_label')}: {tr('sort_' + new)}", timeout=2)
+        self.refresh_sessions()
+
+    def action_cycle_idle(self) -> None:
+        # Cycle none → loose → precise → none (persistance via config.ini / --idle-format).
+        order = ['none', 'loose', 'precise']
+        cur = getattr(CFG, 'idle_format', 'none')
+        new = order[(order.index(cur) + 1) % len(order)] if cur in order else 'none'
+        CFG.idle_format = new
+        self.notify(f"{tr('idle_label')}: {tr('idle_' + new)}", timeout=2)
+        self.refresh_sessions()
+
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         self._focus_row(event.cursor_row)
 
@@ -1210,10 +1333,17 @@ def print_once() -> None:
         ctx = f" · ctx {pct}%" if pct is not None else ""
         cfg = display_config_dir(s.get('config_dir'))
         inst = f" · {CLAUDE_IDLE_GLYPH}{cfg}" if cfg else ""
+        wt = f" · WT:{s['worktree']}" if s.get('worktree') else ""
+        # Durée d'inactivité : honore idle_format comme la vue live (none → masquée).
+        idle_fmt = getattr(CFG, 'idle_format', 'none')
+        la = s.get('last_activity')
+        idle = (f" · idle {format_idle(time.time() - la, idle_fmt)}"
+                if idle_fmt != 'none' and la is not None
+                and not s['working'] and not s['waiting'] else "")
         topic = (s.get('topic') or '').strip().split('\n', 1)[0]
         top = f" · {topic}" if topic else ""
         print(f"[{badge:>9}] {s['project']:<30} {tr('pid')} {s['pid']} · "
-              f"{format_elapsed(s['elapsed'])}{ctx}{inst}{top}")
+              f"{format_elapsed(s['elapsed'])}{ctx}{inst}{wt}{idle}{top}")
 
 
 async def _smoke_frame() -> None:

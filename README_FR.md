@@ -16,6 +16,9 @@ Une interface terminal (Textual) qui surveille toutes les sessions Claude Code a
   - **Travaille** (amber) — Claude traite votre message, avec le nom de l'outil
   - **Idle** (vert) — session en pause
 - Utilisation du contexte (`ctx%`) affichée si disponible
+- **Tri par inactivité** optionnel (`s`) — sessions les plus récemment inactives en tête
+- **Durée d'inactivité** optionnelle (`i`) sur les lignes idle — approx. (`~5m`) ou précise (`02:24:23`)
+- Sessions en **worktree** Git rattachées à leur vrai projet, étiquetées `↳ WT: <nom>`
 - `Entrée` ou clic sur une ligne pour focus le terminal de la session
 - Mode cartes (`c`) pour un affichage plus aéré
 - En-tête affichant la version installée avec un indicateur de mise à jour (vert = à jour, rouge = une nouvelle version disponible)
@@ -82,6 +85,8 @@ uv run ~/.local/bin/claude-watcher-tui
 | `r` | Rafraîchir maintenant |
 | `c` | Basculer le mode cartes |
 | `t` | Afficher/masquer le sujet de session |
+| `s` | Tri : par défaut ↔ par inactivité |
+| `i` | Durée d'inactivité : masquée → approx. → précise |
 | `a` | À propos / infos de mise à jour |
 | `q` | Quitter |
 
@@ -93,6 +98,8 @@ uv run ~/.local/bin/claude-watcher-tui
 --once              afficher les sessions en texte brut et quitter (debug)
 --cards             démarrer en mode cartes
 --no-topic          masque le sujet de session sous chaque ligne (bascule avec « t »)
+--sort default|idle  ordre de tri (défaut : default ; bascule avec « s »)
+--idle-format none|loose|precise  durée d'inactivité sur les lignes idle (défaut : none ; cycle avec « i »)
 ```
 
 ## Comment ça marche

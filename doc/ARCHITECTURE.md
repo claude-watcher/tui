@@ -14,14 +14,17 @@ lang = en          # en | fr — auto-detected from system locale if omitted
 
 [display]
 refresh_ms = 2000  # refresh interval in milliseconds (inotify drives instant updates; this is the fallback)
+sort_mode   = default  # default (state then project) | idle (state then most-recently-idle first) — toggle live with 's'
+idle_format = none     # idle duration on idle rows: none | loose (~Xm) | precise ([Nd ]HH:MM:SS) — cycle live with 'i'
 
 [features]
 show_topic = true  # per-row session topic line (true | false) — toggle live with 't'
 ```
 
-CLI flags (`--lang`, `--refresh-ms`, `--no-topic`, see the README) override these
-at launch. The session topic line can also be toggled at runtime with the `t` key
-(ephemeral; persistence lives in `config.ini` / `--no-topic`).
+CLI flags (`--lang`, `--refresh-ms`, `--no-topic`, `--sort`, `--idle-format`, see
+the README) override these at launch. Sort, idle-format and the topic line can
+also be changed at runtime (`s` / `i` / `t`; ephemeral — persistence lives in
+`config.ini` / the matching CLI flag).
 
 ## Session detection
 
@@ -31,6 +34,13 @@ Code writes it; otherwise state is derived from the session **transcript**
 (`~/.claude/projects/<slug>/<sessionId>.jsonl`). Whether the registry file
 exists depends on the Claude Code version, so the TUI uses it when present and
 falls back to the transcript when it is not.
+
+Sessions running inside a Claude **worktree** (`<project>/.claude/worktrees/<name>`)
+keep their transcript under the *parent project's* slug, not the worktree path.
+The TUI detects the marker, resolves to the parent project (so context %, topic
+and idle time work), shows the real project path, and adds a `↳ WT: <name>`
+sub-line. When the parent transcript can't be confirmed it leaves the raw path
+untouched.
 
 1. The TUI enumerates sessions by scanning `/proc/<pid>/comm` for an exact match
    on `claude`; field 22 of `/proc/<pid>/stat` gives the process `starttime`
