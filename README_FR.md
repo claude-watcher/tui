@@ -22,7 +22,8 @@ Une interface terminal (Textual) qui surveille toutes les sessions Claude Code a
 - `Entrée` ou clic sur une ligne pour focus le terminal de la session
 - Mode cartes (`c`) pour un affichage plus aéré
 - En-tête affichant la version installée avec un indicateur de mise à jour (vert = à jour, rouge = une nouvelle version disponible)
-- Langue auto-détectée depuis la locale système (`fr` / `en`)
+- **Fenêtre de réglages** (`p`) — choix de la langue et de toutes les options d'affichage au même endroit (persistées)
+- Langue auto-détectée depuis la locale système (`fr` / `en`), modifiable à tout moment dans les réglages
 
 ## Prérequis
 
@@ -47,8 +48,9 @@ Pour **monter de version**, relance simplement la commande `latest`.
 L'installateur :
 1. Installe `uv` si absent, vérifie `wmctrl`/`xdotool`
 2. Télécharge le script dans `~/.local/bin/claude-watcher-tui`
-3. Définit la langue (demandée dans un terminal ; sinon `CW_LANG=fr|en`)
-4. Crée `~/.config/claude-watcher/config.ini` (config partagée, ignorée si déjà présente)
+3. Crée `~/.config/claude-watcher/config.ini` (config partagée, ignorée si déjà présente)
+
+La langue est auto-détectée depuis la locale système, puis modifiable dans la fenêtre de réglages (`p`) ou dans `config.ini`.
 
 <details>
 <summary>Depuis un clone local (développement)</summary>
@@ -82,15 +84,11 @@ uv run ~/.local/bin/claude-watcher-tui
 |--------|--------|
 | `↑` / `↓` | Naviguer entre les sessions |
 | `Entrée` / clic | Focus le terminal de la session |
-| `r` | Rafraîchir maintenant |
-| `c` | Basculer le mode cartes |
-| `t` | Afficher/masquer le sujet de session |
-| `h` | Afficher/masquer l'infobulle de survol |
-| `s` | Tri : par défaut ↔ par inactivité |
-| `i` | Durée d'inactivité : masquée → approx. → précise |
+| `p` | **Réglages** — langue + options d'affichage (appliqués et enregistrés aussitôt) |
 | `k` | Fermer la session sélectionnée (inactive uniquement) — confirmation, puis `SIGTERM` |
 | `a` | À propos / infos de mise à jour |
 | `q` | Quitter |
+| `c` `t` `h` `s` `i` | Bascules rapides (aussi dans les Réglages) : cartes · sujet · infobulle · tri · inactivité |
 
 ### Options CLI
 

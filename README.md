@@ -22,7 +22,8 @@ A terminal UI (Textual) that monitors all running Claude Code sessions on your m
 - Press `Enter` or click a row to focus the session's terminal window
 - Cards mode (`c`) for a more spacious layout
 - Header shows the installed version with an update indicator (green = up to date, red = a newer release is available)
-- Language auto-detected from system locale (`fr` / `en`)
+- **Settings screen** (`p`) — pick the language and toggle every display option in one place (also persisted)
+- Language auto-detected from system locale (`fr` / `en`), changeable any time in the settings screen
 
 ## Requirements
 
@@ -82,15 +83,11 @@ uv run ~/.local/bin/claude-watcher-tui
 |-----|--------|
 | `↑` / `↓` | Navigate sessions |
 | `Enter` / click | Focus session's terminal |
-| `r` | Refresh now |
-| `c` | Toggle cards layout |
-| `t` | Toggle the per-session topic line |
-| `h` | Toggle the hover tooltip |
-| `s` | Toggle sort: default ↔ by idle time |
-| `i` | Cycle idle duration: hidden → approx → precise |
+| `p` | **Settings** — language + display options (apply & save instantly) |
 | `k` | Close the selected session (idle only) — confirm, then sends `SIGTERM` |
 | `a` | About / update info |
 | `q` | Quit |
+| `c` `t` `h` `s` `i` | Quick toggles (also in Settings): cards · topic · tooltip · sort · idle duration |
 
 ### CLI flags
 
