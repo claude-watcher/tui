@@ -1113,20 +1113,49 @@ class ConfirmKillScreen(ModalScreen[bool]):
         self.dismiss(False)
 
 
+class _NavSelect(Select):
+    """Select qui n'ouvre QUE sur Entrée/Espace.
+
+    Le Select natif lie aussi haut/bas à l'ouverture du menu (`show_overlay`), si
+    bien qu'une flèche Bas changeait la valeur au lieu de naviguer. On retire
+    haut/bas : elles remontent alors à ConfigScreen qui déplace le focus entre les
+    réglages. Une fois le menu ouvert, c'est l'overlay (focalisé) qui reprend les
+    flèches pour choisir la valeur, puis Entrée valide / Échap ferme.
+    """
+
+    # Textual FUSIONNE les BINDINGS de la hiérarchie : pour neutraliser le
+    # haut/bas hérité (→ show_overlay), il faut les RÉASSIGNER ici. On les mappe
+    # vers la navigation de focus (comme le fait ConfigScreen pour les Switch).
+    BINDINGS = [
+        Binding("enter,space", "show_overlay", "Show menu", show=False),
+        Binding("down", "nav_next", show=False),
+        Binding("up", "nav_prev", show=False),
+    ]
+
+    def action_nav_next(self) -> None:
+        self.screen.focus_next()
+
+    def action_nav_prev(self) -> None:
+        self.screen.focus_previous()
+
+
 class ConfigScreen(ModalScreen):
     """Fenêtre de réglages (langue + affichage). Pendant des touches de bascule
     et du dialogue Réglages du widget GTK. Chaque changement est appliqué et
     persisté DANS LA FOULÉE (config.ini, partagé avec le GTK) — pas de bouton OK.
     Les raccourcis c/t/h/s/i restent dispo en parallèle.
+
+    Navigation : flèches haut/bas = passer d'un réglage à l'autre ; Entrée/Espace
+    = activer (ouvrir un menu / basculer un switch). Tab fonctionne aussi.
     """
 
     # Panneau ancré EN BAS + fond transparent (pas de voile assombri) : le tableau
     # reste visible AU-DESSUS et se met à jour en direct quand on change un réglage
     # (refresh_sessions sur l'app de base) — on voit l'effet sans fermer la fenêtre.
     CSS = """
-    ConfigScreen { align: center bottom; background: transparent; }
+    ConfigScreen { align: center top; background: transparent; }
     #config-box {
-        width: 70; max-width: 95%; height: auto; margin-bottom: 1;
+        width: 70; max-width: 95%; height: auto; margin-top: 1;
         padding: 1 2; background: #1a1a22; border: round #3a3a4a;
     }
     #config-box > Static { margin-bottom: 1; }
@@ -1137,7 +1166,17 @@ class ConfigScreen(ModalScreen):
     .cfg-desc { color: #888898; margin-bottom: 1; }
     """
 
-    BINDINGS = [("escape,p,q", "close", "Close")]
+    BINDINGS = [
+        ("escape,p,q", "close", "Close"),
+        Binding("down", "focus_next", "Next field", show=False),
+        Binding("up", "focus_previous", "Previous field", show=False),
+    ]
+
+    def action_focus_next(self) -> None:
+        self.focus_next()
+
+    def action_focus_previous(self) -> None:
+        self.focus_previous()
 
     def compose(self) -> ComposeResult:
         with Vertical(id="config-box"):
@@ -1145,9 +1184,9 @@ class ConfigScreen(ModalScreen):
             with Vertical(classes="cfg-item"):
                 with Horizontal(classes="cfg-head"):
                     yield Label(tr('cfg_lang'))
-                    yield Select([("Français", "fr"), ("English", "en")],
-                                 value=getattr(CFG, 'lang', 'en'),
-                                 allow_blank=False, id="cfg-lang")
+                    yield _NavSelect([("Français", "fr"), ("English", "en")],
+                                     value=getattr(CFG, 'lang', 'en'),
+                                     allow_blank=False, id="cfg-lang")
                 yield Static(tr('cfg_lang_d'), classes="cfg-desc")
             with Vertical(classes="cfg-item"):
                 with Horizontal(classes="cfg-head"):
@@ -1167,17 +1206,17 @@ class ConfigScreen(ModalScreen):
             with Vertical(classes="cfg-item"):
                 with Horizontal(classes="cfg-head"):
                     yield Label(f"{tr('cfg_sort')}  [dim](s)[/dim]")
-                    yield Select([(tr('sort_default'), 'default'), (tr('sort_idle'), 'idle')],
-                                 value=getattr(CFG, 'sort_mode', 'default'),
-                                 allow_blank=False, id="cfg-sort")
+                    yield _NavSelect([(tr('sort_default'), 'default'), (tr('sort_idle'), 'idle')],
+                                     value=getattr(CFG, 'sort_mode', 'default'),
+                                     allow_blank=False, id="cfg-sort")
                 yield Static(tr('cfg_sort_d'), classes="cfg-desc")
             with Vertical(classes="cfg-item"):
                 with Horizontal(classes="cfg-head"):
                     yield Label(f"{tr('cfg_idle')}  [dim](i)[/dim]")
-                    yield Select([(tr('idle_none'), 'none'), (tr('idle_loose'), 'loose'),
-                                  (tr('idle_precise'), 'precise')],
-                                 value=getattr(CFG, 'idle_format', 'none'),
-                                 allow_blank=False, id="cfg-idle")
+                    yield _NavSelect([(tr('idle_none'), 'none'), (tr('idle_loose'), 'loose'),
+                                      (tr('idle_precise'), 'precise')],
+                                     value=getattr(CFG, 'idle_format', 'none'),
+                                     allow_blank=False, id="cfg-idle")
                 yield Static(tr('cfg_idle_d'), classes="cfg-desc")
             yield Static(f"[dim]{tr('config_hint')}[/dim]")
 

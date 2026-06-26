@@ -35,8 +35,15 @@ spot (same `save_config` the quick toggles use) — no OK button. This is why th
 installer no longer prompts for a language: it is auto-detected from the locale
 and changed in-app afterwards. The `c/t/h/s/i` keys remain as hidden power-user
 shortcuts; the footer shows only the primary actions (Focus, Kill, Parameters,
-About, Quit). There is no manual *refresh* key — the inotify watch plus the
+About, Quit), with Parameters/About right-aligned via a `1fr` spacer in a
+`WatcherFooter`. There is no manual *refresh* key — the inotify watch plus the
 polling interval already re-scan continuously, so it would be a no-op.
+
+Inside the settings screen, **arrows move focus between rows** and **Enter/Space
+activates** the focused control (toggle a switch / open a menu). The stock
+`Select` opens its menu on up/down, which hijacked row navigation, so the selects
+are a `_NavSelect` subclass that rebinds up/down to focus movement and keeps
+Enter/Space for opening; once a menu is open its overlay handles the arrows.
 
 ## Session detection
 
