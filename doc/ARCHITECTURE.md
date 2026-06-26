@@ -14,17 +14,19 @@ lang = en          # en | fr — auto-detected from system locale if omitted
 
 [display]
 refresh_ms = 2000  # refresh interval in milliseconds (inotify drives instant updates; this is the fallback)
+cards       = false  # cards layout, blank line between sessions (true | false) — toggle live with 'c'
 sort_mode   = default  # default (state then project) | idle (state then most-recently-idle first) — toggle live with 's'
-idle_format = none     # idle duration on idle rows: none | loose (~Xm) | precise ([Nd ]HH:MM:SS) — cycle live with 'i'
+idle_format = none     # idle duration on idle rows: none | loose (minute res, [Nd ]HH:MM) | precise ([Nd ]HH:MM:SS) — cycle live with 'i'
 
 [features]
 show_topic = true  # per-row session topic line (true | false) — toggle live with 't'
+hover      = true  # hover tooltip with full path + topic (true | false) — toggle live with 'h'
 ```
 
-CLI flags (`--lang`, `--refresh-ms`, `--no-topic`, `--sort`, `--idle-format`, see
-the README) override these at launch. Sort, idle-format and the topic line can
-also be changed at runtime (`s` / `i` / `t`; ephemeral — persistence lives in
-`config.ini` / the matching CLI flag).
+CLI flags (`--lang`, `--refresh-ms`, `--cards`, `--no-topic`, `--no-hover`,
+`--sort`, `--idle-format`, see the README) override these at launch. The live
+toggles (`c` / `t` / `h` / `s` / `i`) write their new value straight back to
+`config.ini`, so a change survives the next restart.
 
 ## Session detection
 
