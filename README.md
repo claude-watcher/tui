@@ -16,6 +16,9 @@ A terminal UI (Textual) that monitors all running Claude Code sessions on your m
   - **Working** (amber) — Claude is processing your message, with tool name
   - **Idle** (green) — session paused
 - Context window usage (`ctx%`) shown when available
+- Optional **sort by idle time** (`s`) — most-recently-idle sessions on top
+- Optional **idle duration** (`i`) on idle rows — approx (`02:24`, minute res) or precise (`02:24:23`)
+- Git **worktree** sessions resolved to their real project, tagged `↳ WT: <name>`
 - Press `Enter` or click a row to focus the session's terminal window
 - Cards mode (`c`) for a more spacious layout
 - Header shows the installed version with an update indicator (green = up to date, red = a newer release is available)
@@ -82,6 +85,9 @@ uv run ~/.local/bin/claude-watcher-tui
 | `r` | Refresh now |
 | `c` | Toggle cards layout |
 | `t` | Toggle the per-session topic line |
+| `h` | Toggle the hover tooltip |
+| `s` | Toggle sort: default ↔ by idle time |
+| `i` | Cycle idle duration: hidden → approx → precise |
 | `a` | About / update info |
 | `q` | Quit |
 
@@ -93,6 +99,9 @@ uv run ~/.local/bin/claude-watcher-tui
 --once              print sessions as plain text and exit (debug/scripting)
 --cards             start in cards layout
 --no-topic          hide the per-session topic line (toggle live with 't')
+--no-hover          disable the hover tooltip (toggle live with 'h')
+--sort default|idle sort order (default: default; toggle live with 's')
+--idle-format none|loose|precise  idle duration on idle rows (default: none; cycle live with 'i')
 ```
 
 ## How it works
