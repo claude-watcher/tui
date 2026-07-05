@@ -12,7 +12,7 @@ in a live table and lets you jump to the owning terminal window.
 Run:    uv run ./claude-watcher-tui.py        # auto-installs textual
 Config: ~/.config/claude-watcher/config.ini   # shared with the GTK widget (lang, refresh_ms)
 
-Keys:   ↑/↓ navigate · enter/click focus terminal · r refresh now · q quit
+Keys:   ↑/↓ navigate · enter/space/click focus terminal · q quit
 
 The session-detection backend (ps / /proc / JSONL parsing / focus_terminal) is a
 verbatim port of claude-watcher-gtk.py — only the frontend differs.
@@ -107,6 +107,10 @@ def load_config() -> dict:
         'cards':      d.get('cards', 'false').lower() == 'true',
         'show_topic': f.get('show_topic', 'true').lower() == 'true',
         'hover':      f.get('hover', 'true').lower() == 'true',
+        # Focus terminal au clic. Désactivable : cliquer le terminal pour le
+        # remettre au premier plan ne doit pas voler le focus vers une autre
+        # fenêtre. Entrée/Espace restent actifs.
+        'click_focus': f.get('click_focus', 'true').lower() == 'true',
         # Tri : 'default' (alpha) ou 'idle' (par ancienneté d'inactivité). Format
         # de la durée d'inactivité affichée : 'none' (off), 'loose' (~Xm), 'precise'.
         'sort_mode':  'idle' if d.get('sort_mode', 'default').lower() == 'idle' else 'default',
@@ -150,6 +154,9 @@ def parse_args(defaults: dict, argv: list[str] | None = None) -> argparse.Namesp
     p.add_argument('--no-hover', dest='hover', action='store_false',
                    default=defaults['hover'],
                    help="désactive l'infobulle de survol. Bascule à la volée avec 'h'.")
+    p.add_argument('--no-click-focus', dest='click_focus', action='store_false',
+                   default=defaults['click_focus'],
+                   help="le clic ne focalise plus le terminal (Entrée/Espace restent actifs).")
     p.add_argument('--sort', dest='sort_mode', default=defaults['sort_mode'],
                    choices=['default', 'idle'],
                    help="ordre de tri (défaut: default). Bascule à la volée avec 's'.")
@@ -224,12 +231,14 @@ STRINGS = {
         'cfg_cards':        'Cartes',
         'cfg_topic':        'Sujet',
         'cfg_hover':        'Infobulle',
+        'cfg_click':        'Focus au clic',
         'cfg_sort':         'Tri',
         'cfg_idle':         'Durée d’inactivité',
         'cfg_lang_d':       'Langue de l’interface.',
         'cfg_cards_d':      'Ligne vide entre les sessions (affichage plus aéré).',
         'cfg_topic_d':      'Affiche le sujet (titre IA) sous chaque session.',
         'cfg_hover_d':      'Infobulle au survol : chemin et sujet complets.',
+        'cfg_click_d':      'Un clic focalise le terminal. Désactivé : Entrée/Espace uniquement.',
         'cfg_sort_d':       'Ordre : par projet, ou par inactivité (récents en tête).',
         'cfg_idle_d':       'Durée d’inactivité affichée sur les lignes idle.',
     },
@@ -283,12 +292,14 @@ STRINGS = {
         'cfg_cards':        'Cards',
         'cfg_topic':        'Topic',
         'cfg_hover':        'Tooltip',
+        'cfg_click':        'Click focus',
         'cfg_sort':         'Sort',
         'cfg_idle':         'Idle duration',
         'cfg_lang_d':       'Interface language.',
         'cfg_cards_d':      'Blank line between sessions (more spacing).',
         'cfg_topic_d':      'Show the topic (AI title) under each session.',
         'cfg_hover_d':      'Hover tooltip: full path and topic.',
+        'cfg_click_d':      'Clicking a row focuses its terminal. Off: Enter/Space only.',
         'cfg_sort_d':       'Order: by project, or by idle time (recent first).',
         'cfg_idle_d':       'Idle duration shown on idle rows.',
     },
@@ -989,6 +1000,15 @@ class SessionTable(DataTable):
     """
 
     async def _on_click(self, event) -> None:  # noqa: ANN001
+        # Focus au clic désactivé (features.click_focus) : le clic est inerte —
+        # ni focus terminal, ni déplacement du curseur. Cliquer le terminal pour
+        # le ramener au premier plan ne doit avoir AUCUN effet de bord.
+        # prevent_default() court-circuite le _on_click de DataTable : le
+        # dispatch MRO de Textual s'arrête sur _no_default_action avant les
+        # classes de base (vérifié dans message_pump, textual 8.2.7).
+        if not getattr(CFG, 'click_focus', True):
+            event.prevent_default()
+            return
         meta = event.style.meta
         row, col = meta.get("row", -1), meta.get("column", -1)
         if 0 <= row < self.row_count and col >= 0 \
@@ -1157,6 +1177,10 @@ class ConfigScreen(ModalScreen):
     #config-box {
         width: 70; max-width: 95%; height: auto; margin-top: 1;
         padding: 1 2; background: #1a1a22; border: round #3a3a4a;
+        /* 7 réglages ne tiennent plus sur un terminal court : plafonne à
+           l'écran et scrolle — la navigation par flèches ramène le réglage
+           focalisé dans la zone visible. */
+        max-height: 100%; overflow-y: auto;
     }
     #config-box > Static { margin-bottom: 1; }
     .cfg-item { height: auto; }
@@ -1205,6 +1229,11 @@ class ConfigScreen(ModalScreen):
                 yield Static(tr('cfg_hover_d'), classes="cfg-desc")
             with Vertical(classes="cfg-item"):
                 with Horizontal(classes="cfg-head"):
+                    yield Label(tr('cfg_click'))
+                    yield Switch(value=getattr(CFG, 'click_focus', True), id="cfg-click")
+                yield Static(tr('cfg_click_d'), classes="cfg-desc")
+            with Vertical(classes="cfg-item"):
+                with Horizontal(classes="cfg-head"):
                     yield Label(f"{tr('cfg_sort')}  [dim](s)[/dim]")
                     yield _NavSelect([(tr('sort_default'), 'default'), (tr('sort_idle'), 'idle')],
                                      value=getattr(CFG, 'sort_mode', 'default'),
@@ -1233,6 +1262,9 @@ class ConfigScreen(ModalScreen):
             if not val:
                 self.app.query_one("#sessions", DataTable).tooltip = None
             save_config({'features': {'hover': 'true' if val else 'false'}})
+        elif event.switch.id == "cfg-click":
+            CFG.click_focus = val
+            save_config({'features': {'click_focus': 'true' if val else 'false'}})
         self.app.refresh_sessions()
 
     def on_select_changed(self, event: Select.Changed) -> None:
@@ -1309,6 +1341,9 @@ class WatcherApp(App):
         Binding("i", "cycle_idle", "Idle", show=False),
         ("k", "kill_session", "Kill"),
         ("enter", "focus_session", "Focus terminal"),
+        # Espace = même action, masquée du footer. Sert surtout quand le focus
+        # au clic est désactivé (features.click_focus) : clavier uniquement.
+        Binding("space", "focus_session", "Focus terminal", show=False),
         ("p", "config", "Parameters"),
         ("a", "about", "About"),
     ]
@@ -1597,6 +1632,11 @@ class WatcherApp(App):
         )
 
     def action_focus_session(self) -> None:
+        # Entrée/Espace sont des bindings App, donc actifs même sous une modale
+        # (About, confirmation de kill) qui ne consomme pas la touche : sans ce
+        # garde, Espace y déclencherait un saut de focus fenêtre en plein dialogue.
+        if len(self.screen_stack) > 1:
+            return
         table = self.query_one("#sessions", DataTable)
         if table.row_count:
             self._focus_row(table.cursor_row)

@@ -19,12 +19,14 @@ sort_mode   = default  # default (state then project) | idle (state then most-re
 idle_format = none     # idle duration on idle rows: none | loose (minute res, [Nd ]HH:MM) | precise ([Nd ]HH:MM:SS) — cycle live with 'i'
 
 [features]
-show_topic = true  # per-row session topic line (true | false) — toggle live with 't'
-hover      = true  # hover tooltip with full path + topic (true | false) — toggle live with 'h'
+show_topic  = true  # per-row session topic line (true | false) — toggle live with 't'
+hover       = true  # hover tooltip with full path + topic (true | false) — toggle live with 'h'
+click_focus = true  # clicking a row focuses its terminal (true | false); off = Enter/Space only
 ```
 
 CLI flags (`--lang`, `--refresh-ms`, `--cards`, `--no-topic`, `--no-hover`,
-`--sort`, `--idle-format`, see the README) override these at launch. The live
+`--no-click-focus`, `--sort`, `--idle-format`, see the README) override these at
+launch. The live
 toggles (`c` / `t` / `h` / `s` / `i`) write their new value straight back to
 `config.ini`, so a change survives the next restart.
 
@@ -126,6 +128,14 @@ new-process detection and elapsed-time updates.
 Terminal focus on Wayland is limited — cross-application window management is
 restricted by Wayland's security model. Kitty with `allow_remote_control` works
 on the same workspace only; XWayland terminals (e.g. xterm) work everywhere.
+
+With `features.click_focus = false` (or `--no-click-focus`) mouse clicks on the
+table are fully inert — no terminal focus, no cursor move — so clicking the TUI's
+own terminal to raise it never steals focus toward another window; Enter/Space
+still trigger the focus. Implementation: `SessionTable._on_click` calls
+`event.prevent_default()` and returns early, which stops Textual's MRO dispatch
+before `DataTable._on_click` runs (the base handler is what moves the cursor and
+posts `RowSelected`).
 
 ## Closing a session
 
