@@ -106,6 +106,10 @@ def load_config() -> dict:
         'refresh_ms': int(d.get('refresh_ms', 2000)),
         'cards':      d.get('cards', 'false').lower() == 'true',
         'show_topic': f.get('show_topic', 'true').lower() == 'true',
+        # Compteur/détail des subagents lancés : affiché par défaut.
+        'show_agents': f.get('show_agents', 'true').lower() == 'true',
+        # Démon Claude Code : affiché par défaut, balisé (D) ; masquable ici.
+        'hide_daemons': f.get('hide_daemons', 'false').lower() == 'true',
         'hover':      f.get('hover', 'true').lower() == 'true',
         # Focus terminal au clic. Désactivable : cliquer le terminal pour le
         # remettre au premier plan ne doit pas voler le focus vers une autre
@@ -151,6 +155,12 @@ def parse_args(defaults: dict, argv: list[str] | None = None) -> argparse.Namesp
     p.add_argument('--no-topic', dest='show_topic', action='store_false',
                    default=defaults['show_topic'],
                    help="masque le sujet de session (titre IA) sous chaque ligne.")
+    p.add_argument('--no-agents', dest='show_agents', action='store_false',
+                   default=defaults['show_agents'],
+                   help="masque le compteur de sous-agents lancés par session.")
+    p.add_argument('--hide-daemons', dest='hide_daemons', action='store_true',
+                   default=defaults['hide_daemons'],
+                   help="masque les lignes du démon Claude Code (balisées (D)).")
     p.add_argument('--no-hover', dest='hover', action='store_false',
                    default=defaults['hover'],
                    help="désactive l'infobulle de survol. Bascule à la volée avec 'h'.")
@@ -189,6 +199,11 @@ STRINGS = {
         'no_session': 'aucune session active',
         'attend':     'attend',
         'pid':        'pid',
+        'agent':      'agent',
+        'agents':     'agents',
+        'tip_agents': 'Agents :',
+        'daemon':     'démon',
+        'tip_daemon': 'Démon Claude Code (pas une session).',
         'col_state':  'état',
         'col_proj':   'projet',
         'col_meta':   'pid · durée',
@@ -230,6 +245,8 @@ STRINGS = {
         'cfg_lang':         'Langue',
         'cfg_cards':        'Cartes',
         'cfg_topic':        'Sujet',
+        'cfg_agents':       'Sous-agents',
+        'cfg_daemons':      'Masquer les démons',
         'cfg_hover':        'Infobulle',
         'cfg_click':        'Focus au clic',
         'cfg_sort':         'Tri',
@@ -237,6 +254,8 @@ STRINGS = {
         'cfg_lang_d':       'Langue de l’interface.',
         'cfg_cards_d':      'Ligne vide entre les sessions (affichage plus aéré).',
         'cfg_topic_d':      'Affiche le sujet (titre IA) sous chaque session.',
+        'cfg_agents_d':     'Compte les sous-agents lancés ; détail dans l’infobulle.',
+        'cfg_daemons_d':    'Masque les lignes du démon Claude Code (balisées (D)).',
         'cfg_hover_d':      'Infobulle au survol : chemin et sujet complets.',
         'cfg_click_d':      'Un clic focalise le terminal. Désactivé : Entrée/Espace uniquement.',
         'cfg_sort_d':       'Ordre : par projet, ou par inactivité (récents en tête).',
@@ -250,6 +269,11 @@ STRINGS = {
         'no_session': 'no active session',
         'attend':     'waiting',
         'pid':        'pid',
+        'agent':      'agent',
+        'agents':     'agents',
+        'tip_agents': 'Agents:',
+        'daemon':     'daemon',
+        'tip_daemon': 'Claude Code daemon (not a session).',
         'col_state':  'state',
         'col_proj':   'project',
         'col_meta':   'pid · elapsed',
@@ -291,6 +315,8 @@ STRINGS = {
         'cfg_lang':         'Language',
         'cfg_cards':        'Cards',
         'cfg_topic':        'Topic',
+        'cfg_agents':       'Subagents',
+        'cfg_daemons':      'Hide daemons',
         'cfg_hover':        'Tooltip',
         'cfg_click':        'Click focus',
         'cfg_sort':         'Sort',
@@ -298,6 +324,8 @@ STRINGS = {
         'cfg_lang_d':       'Interface language.',
         'cfg_cards_d':      'Blank line between sessions (more spacing).',
         'cfg_topic_d':      'Show the topic (AI title) under each session.',
+        'cfg_agents_d':     'Count spawned subagents; each detailed in the tooltip.',
+        'cfg_daemons_d':    'Hide the Claude Code daemon rows (marked (D)).',
         'cfg_hover_d':      'Hover tooltip: full path and topic.',
         'cfg_click_d':      'Clicking a row focuses its terminal. Off: Enter/Space only.',
         'cfg_sort_d':       'Order: by project, or by idle time (recent first).',
@@ -333,29 +361,109 @@ CLAUDE_PROJECTS_DIR = Path.home() / '.claude' / 'projects'
 _CLK_TCK = os.sysconf('SC_CLK_TCK')
 
 
-def get_claude_processes() -> list[dict]:
-    """Énumère les process 'claude' via /proc — pas de fork ps à chaque tick."""
+def _argv_value(argv: list[str], flag: str) -> str | None:
+    """Valeur suivant `flag` dans une argv (cmdline splitée sur NUL), sinon None.
+
+    Vide → None (`or None`). Flag absent ou en dernière position → None.
+    """
+    try:
+        return argv[argv.index(flag) + 1] or None
+    except (ValueError, IndexError):
+        return None
+
+
+def scan_proc(collect_agents: bool = True) -> tuple[list[dict], dict[str, list[dict]]]:
+    """Une seule passe /proc → (sessions/démons 'claude', subagents par parent).
+
+    Une session interactive et le démon partagent comm=='claude' (le démon ne se
+    distingue que par `claude daemon run …`) ; un subagent lancé (Task/essaim)
+    tourne le binaire versionné (comm=version, donc invisible au filtre comm) et
+    se repère à ses tokens argv exacts `--agent-id`/`--parent-session-id` — match
+    sur token exact (argv NUL-splitée) pour éviter les faux positifs d'un
+    substring noyé dans un plus gros argument.
+
+    `collect_agents=False` (feature désactivée) saute entièrement la détection des
+    subagents : aucun cmdline lu pour les process non-'claude' → zéro surcoût.
+
+    comm est lu EN PREMIER : un échec de lecture cmdline ne fait jamais perdre une
+    session claude (elle est juste traitée comme non-démon).
+    """
     try:
         uptime = float(Path('/proc/uptime').read_text().split()[0])
     except Exception:
-        return []
-    procs = []
+        return [], {}
+    procs: list[dict] = []
+    agents: dict[str, list[dict]] = {}
     for entry in Path('/proc').iterdir():
         if not entry.name.isdigit():
             continue
         try:
-            if (entry / 'comm').read_text().strip() != 'claude':
-                continue
-            stat = (entry / 'stat').read_text()
-            fields = stat[stat.rindex(')') + 2:].split()
-            starttime = int(fields[19])
-            elapsed = int(uptime - starttime / _CLK_TCK)
-            start_unix = time.time() - elapsed
-        except Exception:
+            # comm est tronqué à 15 car (TASK_COMM_LEN) — 'claude' y tient.
+            # read_bytes+decode(errors='ignore') : un comm non-UTF-8 (nom posé via
+            # prctl par un process quelconque) lèverait UnicodeDecodeError avec
+            # read_text() — PAS un OSError → crash du scan à chaque tick.
+            comm = (entry / 'comm').read_bytes().decode(errors='ignore').strip()
+        except OSError:
             continue
-        procs.append({'pid': int(entry.name), 'elapsed': elapsed,
-                      'start_unix': start_unix, 'starttime': starttime})
-    return procs
+        if comm == 'claude':
+            try:
+                stat = (entry / 'stat').read_text()
+                fields = stat[stat.rindex(')') + 2:].split()
+                starttime = int(fields[19])
+                elapsed = int(uptime - starttime / _CLK_TCK)
+            except Exception:
+                continue
+            # cmdline seulement pour distinguer le démon ; illisible (course avec
+            # un exec/exit) → non-démon, on ne perd pas la session pour autant.
+            try:
+                argv = (entry / 'cmdline').read_bytes().decode(errors='ignore').split('\0')
+            except OSError:
+                argv = []
+            procs.append({'pid': int(entry.name), 'elapsed': elapsed,
+                          'start_unix': time.time() - elapsed, 'starttime': starttime,
+                          'is_daemon': len(argv) > 1 and argv[1] == 'daemon'})
+            continue
+        if not collect_agents:
+            continue
+        # Subagent : comm ≠ 'claude', on doit lire cmdline pour le repérer.
+        try:
+            argv = (entry / 'cmdline').read_bytes().decode(errors='ignore').split('\0')
+        except OSError:
+            continue
+        if '--agent-id' not in argv:
+            continue
+        parent = _argv_value(argv, '--parent-session-id')
+        if not parent:
+            continue
+        # --agent-name peut manquer (agents anonymes) : repli sur la partie locale
+        # de l'id (<name>@<team>).
+        name = _argv_value(argv, '--agent-name') or (_argv_value(argv, '--agent-id') or '?').split('@', 1)[0]
+        model = (_argv_value(argv, '--model') or '').removeprefix('claude-')
+        agents.setdefault(parent, []).append({
+            'pid':   int(entry.name),
+            'name':  name,
+            'type':  _argv_value(argv, '--agent-type'),
+            'model': model or None,
+        })
+    for lst in agents.values():
+        lst.sort(key=lambda a: a['name'])
+    return procs, agents
+
+
+def resolve_config_dir(env: dict[str, str]) -> str | None:
+    """CLAUDE_CONFIG_DIR d'un process, `~` résolu et validé absolu.
+
+    CLAUDE_CONFIG_DIR hérité de l'env de la session : on résout `~` (quoté →
+    non-expansé par le shell) et on rejette tout chemin relatif (sans cwd de la
+    session, il pointerait sur le cwd du watcher → registre/JSONL/watch au mauvais
+    endroit) → None. None aussi si la variable est absente.
+    """
+    config_dir = env.get('CLAUDE_CONFIG_DIR') or None
+    if config_dir:
+        config_dir = os.path.expanduser(config_dir)
+        if not os.path.isabs(config_dir):
+            return None
+    return config_dir
 
 
 def get_cwd(pid: int) -> str | None:
@@ -734,8 +842,11 @@ def kill_session(pid: int, starttime: int, config_dir: str | None = None) -> boo
 
 def get_session_state(pid: int, cwd: str | None,
                       starttime: int = 0,
-                      config_dir: str | None = None) -> tuple[str, int | None, str | None, str | None, float | None]:
-    """État de la session. Retourne (state, context_pct, tool, topic, last_activity).
+                      config_dir: str | None = None,
+                      ) -> tuple[str, int | None, str | None, str | None, float | None, str | None]:
+    """État de la session. Retourne (state, context_pct, tool, topic,
+    last_activity, session_id) — session_id sert à rattacher les subagents
+    (--parent-session-id) à leur session ; None si le registre est absent.
 
     Le registre ~/.claude/sessions/<pid>.json (champ `status`) est prioritaire
     quand il existe ; selon la version de Claude Code il peut être absent,
@@ -774,7 +885,7 @@ def get_session_state(pid: int, cwd: str | None,
                 pass
     else:
         state = jsonl_state or 'idle'
-    return state, context_pct, tool, topic, last_activity
+    return state, context_pct, tool, topic, last_activity, session_id
 
 
 def format_elapsed(s) -> str:
@@ -864,11 +975,41 @@ def scan_sessions() -> list[dict]:
     all_windows = get_all_windows()
     window_pids = {w['pid'] for w in all_windows}
 
-    procs = get_claude_processes()
+    procs, subagents = scan_proc(getattr(CFG, 'show_agents', True))
 
     sessions = []
     for p in procs:
         pid      = p['pid']
+        # Démon : pas une session focusable (ni terminal, ni JSONL, ni registre
+        # keyé par pid). On court-circuite tout le résolveur fenêtre/état et on
+        # émet une ligne minimale balisée `daemon` — ou rien si masqué en conf.
+        if p.get('is_daemon'):
+            if getattr(CFG, 'hide_daemons', False):
+                continue
+            cwd = get_cwd(pid)
+            sessions.append({
+                'pid':             pid,
+                'starttime':       p['starttime'],
+                'project':         project_label(cwd),
+                'worktree':        None,
+                'display_cwd':     cwd or '?',
+                'last_activity':   None,
+                'topic':           None,
+                'cwd':             cwd or '?',
+                'elapsed':         p['elapsed'],
+                'waiting':         False,
+                'working':         False,
+                'context_pct':     None,
+                'tool':            None,
+                'terminal_pid':    None,
+                'window_id':       None,
+                'kitty_socket':    None,
+                'kitty_window_id': None,
+                'config_dir':      resolve_config_dir(get_env(pid)),
+                'agents':          [],
+                'daemon':          True,
+            })
+            continue
         cwd      = get_cwd(pid)
         term     = get_parent_terminal(pid, window_pids)
         term_pid = term['pid'] if term else None
@@ -885,16 +1026,8 @@ def scan_sessions() -> list[dict]:
         else:
             window_id = find_best_window(term_pid, cwd, all_windows)
 
-        config_dir = env.get('CLAUDE_CONFIG_DIR') or None
-        if config_dir:
-            # CLAUDE_CONFIG_DIR hérité de l'env de la session : on résout `~`
-            # (quoté → non-expansé par le shell) et on rejette tout chemin
-            # relatif (sans cwd de la session, il pointerait sur le cwd du
-            # watcher → registre/JSONL/watch au mauvais endroit). → défaut.
-            config_dir = os.path.expanduser(config_dir)
-            if not os.path.isabs(config_dir):
-                config_dir = None
-        state, context_pct, tool, topic, last_activity = get_session_state(
+        config_dir = resolve_config_dir(env)
+        state, context_pct, tool, topic, last_activity, session_id = get_session_state(
             pid, cwd, p['starttime'], config_dir)
         # Worktree « confirmé » = marqueur détecté ET transcript résolu
         # (last_activity = mtime du JSONL trouvé). On affiche alors le VRAI projet
@@ -923,6 +1056,8 @@ def scan_sessions() -> list[dict]:
             'kitty_socket':    kitty_socket,
             'kitty_window_id': kitty_window_id,
             'config_dir':      config_dir,
+            'agents':          subagents.get(session_id, []) if session_id else [],
+            'daemon':          False,
         })
     # Priorité d'état (attente > travaille > idle) dans tous les modes. En mode
     # 'idle', SEUL le groupe inactif est départagé par ancienneté d'inactivité
@@ -947,6 +1082,9 @@ def scan_sessions() -> list[dict]:
 
 def session_state_label(s: dict) -> tuple[str, str]:
     """(couleur hex, libellé) pour l'état d'une session."""
+    # Démon : ni actif ni inactif — point/badge neutres (gris).
+    if s.get('daemon'):
+        return TEXT_DIM2, tr('daemon')
     if s['waiting']:
         return COLOR_WAITING, tr('attend')
     if s['working']:
@@ -1224,6 +1362,16 @@ class ConfigScreen(ModalScreen):
                 yield Static(tr('cfg_topic_d'), classes="cfg-desc")
             with Vertical(classes="cfg-item"):
                 with Horizontal(classes="cfg-head"):
+                    yield Label(tr('cfg_agents'))
+                    yield Switch(value=getattr(CFG, 'show_agents', True), id="cfg-agents")
+                yield Static(tr('cfg_agents_d'), classes="cfg-desc")
+            with Vertical(classes="cfg-item"):
+                with Horizontal(classes="cfg-head"):
+                    yield Label(tr('cfg_daemons'))
+                    yield Switch(value=getattr(CFG, 'hide_daemons', False), id="cfg-daemons")
+                yield Static(tr('cfg_daemons_d'), classes="cfg-desc")
+            with Vertical(classes="cfg-item"):
+                with Horizontal(classes="cfg-head"):
                     yield Label(f"{tr('cfg_hover')}  [dim](h)[/dim]")
                     yield Switch(value=getattr(CFG, 'hover', True), id="cfg-hover")
                 yield Static(tr('cfg_hover_d'), classes="cfg-desc")
@@ -1257,6 +1405,12 @@ class ConfigScreen(ModalScreen):
         elif event.switch.id == "cfg-topic":
             CFG.show_topic = val
             save_config({'features': {'show_topic': 'true' if val else 'false'}})
+        elif event.switch.id == "cfg-agents":
+            CFG.show_agents = val
+            save_config({'features': {'show_agents': 'true' if val else 'false'}})
+        elif event.switch.id == "cfg-daemons":
+            CFG.hide_daemons = val
+            save_config({'features': {'hide_daemons': 'true' if val else 'false'}})
         elif event.switch.id == "cfg-hover":
             CFG.hover = val
             if not val:
@@ -1484,9 +1638,13 @@ class WatcherApp(App):
             elif s['working']:
                 working += 1
 
+            daemon = s.get('daemon')
             # Cellule gauche : ● + chemin (ligne 1), pid · durée en sourdine (ligne 2).
             sess = Text(no_wrap=True, overflow="ellipsis")
             sess.append("● ", style=color)
+            # Préfixe « (D) » en orange Claude pour repérer le démon d'un coup d'œil.
+            if daemon:
+                sess.append("(D) ", style=f"bold {COLOR_CLAUDE}")
             sess.append(path_display(s.get('display_cwd') or s['cwd'], path_chars),
                         style="#e2e2e2 bold")
             row_h = 2
@@ -1507,6 +1665,7 @@ class WatcherApp(App):
             cfg = display_config_dir(s.get('config_dir'))
             if cfg:
                 sess.append(f" {CLAUDE_IDLE_GLYPH}{cfg}", style=COLOR_CLAUDE)
+            agents = s.get('agents') or []
             # Sujet IA (ligne 3) : distingue plusieurs sessions du même cwd.
             topic = (s.get('topic') or '').strip().split('\n', 1)[0]
             if topic:
@@ -1516,12 +1675,24 @@ class WatcherApp(App):
                 sess.append("\n")
                 row_h += 1
 
-            # Cellule droite (alignée à droite) : badge (ligne 1), ctx% + tool (ligne 2).
+            # Cellule droite (alignée à droite, colonne d'état) : badge (ligne 1),
+            # compteur de subagents sous le badge (ligne 2, comme le widget GTK),
+            # ctx% + outil (ligne 3). Le compteur vit ICI et non à gauche : la ligne
+            # meta gauche (no_wrap + overflow ellipsis) le tronquait dès que le
+            # chemin remplissait la cellule. `right_lines` porte la hauteur réelle
+            # de cette colonne dans row_h (sinon la 3e ligne serait rognée).
             st = Text(justify="right", no_wrap=True)
             st.append(badge, style=color)
+            right_lines = 1
+            if agents:
+                n = len(agents)
+                st.append(f"\n{n} {tr('agents') if n > 1 else tr('agent')}",
+                          style=COLOR_CLAUDE)
+                right_lines += 1
             pct  = s.get('context_pct')
             tool = s.get('tool')
             st.append("\n")
+            right_lines += 1
             meta2_parts = []
             if pct is not None:
                 meta2_parts.append((f"ctx {pct}%", ctx_color(pct)))
@@ -1533,16 +1704,31 @@ class WatcherApp(App):
                 st.append(txt, style=sty)
             if self._carded:
                 st.append("\n")
+                right_lines += 1
+            # La colonne d'état peut dépasser la gauche (badge/agents/ctx) : la
+            # hauteur de ligne doit couvrir la plus haute des deux cellules.
+            row_h = max(row_h, right_lines)
 
             # Infobulle de survol : chemin complet + sujet complet (les cellules
             # tronquent — chemin par la gauche, sujet à la 1re ligne ellipsée).
             # Text() et NON str : l'infobulle Textual est un Static(markup=True),
             # un sujet retombé sur lastPrompt peut contenir des crochets ('[/]',
             # '[INST]'…) → MarkupError ou texte mangé. Text neutralise le markup.
-            full_topic = (s.get('topic') or '').strip()
             key = str(s['pid'])
-            row_tips[key] = Text(
-                f"{s['cwd']}\n\nTopic: {full_topic}" if full_topic else s['cwd'])
+            tip = s['cwd']
+            if daemon:
+                tip = f"{tip}\n\n{tr('tip_daemon')}"
+            else:
+                full_topic = (s.get('topic') or '').strip()
+                if full_topic:
+                    tip = f"{tip}\n\nTopic: {full_topic}"
+                if agents:
+                    lines = []
+                    for a in agents:
+                        detail = ', '.join(x for x in (a.get('type'), a.get('model')) if x)
+                        lines.append(f" • {a['name']}" + (f" ({detail})" if detail else ""))
+                    tip = f"{tip}\n\n{tr('tip_agents')}\n" + '\n'.join(lines)
+            row_tips[key] = Text(tip)
             built.append((key, sess, st, row_h))
             if s['pid'] == prior_pid:
                 target_row = i
@@ -1621,6 +1807,12 @@ class WatcherApp(App):
         if not (0 <= row < len(self._sessions)):
             return
         s = self._sessions[row]
+        # Le démon n'a pas de terminal : rien à focus. On le DIT (notif) plutôt
+        # qu'un no-op muet — la TUI n'a pas de curseur « non-cliquable » comme le
+        # GTK, sans retour l'utilisateur croit à un bug.
+        if s.get('daemon'):
+            self.notify(tr('tip_daemon'), severity="information", timeout=2)
+            return
         ok = focus_terminal(
             s.get('window_id'), s.get('terminal_pid'),
             s.get('kitty_socket'), s.get('kitty_window_id'),
@@ -1649,6 +1841,12 @@ class WatcherApp(App):
         if not (0 <= row < len(self._sessions)):
             return
         s = self._sessions[row]
+        # Démon exclu du kill : pas une session (pas de registre keyé par pid),
+        # le kill échouerait. Message dédié — « seules les sessions inactives »
+        # serait trompeur pour une ligne qui s'affiche en gris/neutre.
+        if s.get('daemon'):
+            self.notify(tr('tip_daemon'), severity="warning", timeout=2)
+            return
         # Kill réservé aux sessions inactives : on ne ferme pas une session qui
         # travaille ou attend une réponse (tour en cours).
         if s['waiting'] or s['working']:
@@ -1734,8 +1932,11 @@ def print_once() -> None:
                 and not s['working'] and not s['waiting'] else "")
         topic = (s.get('topic') or '').strip().split('\n', 1)[0]
         top = f" · {topic}" if topic else ""
-        print(f"[{badge:>9}] {s['project']:<30} {tr('pid')} {s['pid']} · "
-              f"{format_elapsed(s['elapsed'])}{ctx}{inst}{wt}{idle}{top}")
+        agents = s.get('agents') or []
+        ag = f" · {len(agents)} {tr('agents') if len(agents) > 1 else tr('agent')}" if agents else ""
+        proj = f"(D) {s['project']}" if s.get('daemon') else s['project']
+        print(f"[{badge:>9}] {proj:<30} {tr('pid')} {s['pid']} · "
+              f"{format_elapsed(s['elapsed'])}{ctx}{inst}{wt}{idle}{ag}{top}")
 
 
 async def _smoke_frame() -> None:

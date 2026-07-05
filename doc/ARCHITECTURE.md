@@ -19,14 +19,16 @@ sort_mode   = default  # default (state then project) | idle (state then most-re
 idle_format = none     # idle duration on idle rows: none | loose (minute res, [Nd ]HH:MM) | precise ([Nd ]HH:MM:SS) — cycle live with 'i'
 
 [features]
-show_topic  = true  # per-row session topic line (true | false) — toggle live with 't'
-hover       = true  # hover tooltip with full path + topic (true | false) — toggle live with 'h'
-click_focus = true  # clicking a row focuses its terminal (true | false); off = Enter/Space only
+show_topic   = true   # per-row session topic line (true | false) — toggle live with 't'
+show_agents  = true   # per-row spawned-subagent count + tooltip list (true | false)
+hide_daemons = false  # hide the Claude Code background daemon rows (true | false)
+hover        = true   # hover tooltip with full path + topic (true | false) — toggle live with 'h'
+click_focus  = true   # clicking a row focuses its terminal (true | false); off = Enter/Space only
 ```
 
-CLI flags (`--lang`, `--refresh-ms`, `--cards`, `--no-topic`, `--no-hover`,
-`--no-click-focus`, `--sort`, `--idle-format`, see the README) override these at
-launch. The live
+CLI flags (`--lang`, `--refresh-ms`, `--cards`, `--no-topic`, `--no-agents`,
+`--hide-daemons`, `--no-hover`, `--no-click-focus`, `--sort`, `--idle-format`,
+see the README) override these at launch. The live
 toggles (`c` / `t` / `h` / `s` / `i`) write their new value straight back to
 `config.ini`, so a change survives the next restart.
 
@@ -63,9 +65,13 @@ and idle time work), shows the real project path, and adds a `↳ WT: <name>`
 sub-line. When the parent transcript can't be confirmed it leaves the raw path
 untouched.
 
-1. The TUI enumerates sessions by scanning `/proc/<pid>/comm` for an exact match
-   on `claude`; field 22 of `/proc/<pid>/stat` gives the process `starttime`
-   (in ticks).
+1. A single `/proc` pass enumerates both sessions and subagents. Sessions are
+   `/proc/<pid>/comm` exact-matching `claude`; field 22 of `/proc/<pid>/stat`
+   gives the process `starttime` (in ticks). The same pass also collects
+   **subagents** (see step 7). An interactive session and the background daemon
+   share `comm == claude`; the daemon is told apart by its `claude daemon …`
+   argv and rendered as a non-focusable `(D)` row (excluded from focus and kill,
+   hideable via `features.hide_daemons`).
 2. **State (registry, when present)** — `~/.claude/sessions/<pid>.json` carries a
    `status` field updated in real time:
    - `busy` / `shell` / `compacting` → **working**
@@ -99,6 +105,15 @@ untouched.
    (path left-ellipsized, topic to its first line); hovering a row with the mouse
    shows the full `cwd` and full topic in a tooltip.
 6. Walk the process tree to find the parent terminal window for click-to-focus.
+7. **Subagents** (`Task`-tool background agents, swarm teammates) run the
+   *versioned* binary (`comm` is the version string, not `claude`), so they are
+   not sessions and never appear as focusable rows. They are matched by their
+   exact `--agent-id` / `--parent-session-id` argv tokens and grouped by parent
+   `sessionId`. A session that spawned any shows an `N agents` count under its
+   state badge (right column, like the GTK widget), and the row tooltip lists
+   each (`name`, agent type, model). Optional
+   (`features.show_agents`, on by default); when off, subagent detection — and
+   the `cmdline` read for every non-`claude` process — is skipped entirely.
 
 ### Why the registry instead of hooks
 

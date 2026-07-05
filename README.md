@@ -16,6 +16,8 @@ A terminal UI (Textual) that monitors all running Claude Code sessions on your m
   - **Working** (amber) — Claude is processing your message, with tool name
   - **Idle** (green) — session paused
 - Context window usage (`ctx%`) shown when available
+- Spawned **subagent count** per session (`N agents`), with each agent detailed in the row tooltip — toggle off in Settings
+- Background **daemon** shown as a non-focusable `(D)` row (hideable in Settings)
 - Optional **sort by idle time** (`s`) — most-recently-idle sessions on top
 - Optional **idle duration** (`i`) on idle rows — approx (`02:24`, minute res) or precise (`02:24:23`)
 - Git **worktree** sessions resolved to their real project, tagged `↳ WT: <name>`
@@ -97,6 +99,8 @@ uv run ~/.local/bin/claude-watcher-tui
 --once              print sessions as plain text and exit (debug/scripting)
 --cards             start in cards layout
 --no-topic          hide the per-session topic line (toggle live with 't')
+--no-agents         hide the spawned-subagent count per session
+--hide-daemons      hide the Claude Code background daemon rows (marked (D))
 --no-hover          disable the hover tooltip (toggle live with 'h')
 --no-click-focus    clicking a row no longer focuses its terminal (Enter/Space still do)
 --sort default|idle sort order (default: default; toggle live with 's')
