@@ -19,7 +19,7 @@ A terminal UI (Textual) that monitors all running Claude Code sessions on your m
 - Optional **sort by idle time** (`s`) — most-recently-idle sessions on top
 - Optional **idle duration** (`i`) on idle rows — approx (`02:24`, minute res) or precise (`02:24:23`)
 - Git **worktree** sessions resolved to their real project, tagged `↳ WT: <name>`
-- Press `Enter` or click a row to focus the session's terminal window
+- Press `Enter`/`Space` or click a row to focus the session's terminal window (click can be turned off in Settings)
 - Cards mode (`c`) for a more spacious layout
 - Header shows the installed version with an update indicator (green = up to date, red = a newer release is available)
 - **Settings screen** (`p`) — pick the language and toggle every display option in one place (also persisted)
@@ -82,7 +82,7 @@ uv run ~/.local/bin/claude-watcher-tui
 | Key | Action |
 |-----|--------|
 | `↑` / `↓` | Navigate sessions |
-| `Enter` / click | Focus session's terminal |
+| `Enter` / `Space` / click | Focus session's terminal (click-to-focus can be disabled in Settings) |
 | `p` | **Settings** — language + display options (apply & save instantly) |
 | `k` | Close the selected session (idle only) — confirm, then sends `SIGTERM` |
 | `a` | About / update info |
@@ -98,6 +98,7 @@ uv run ~/.local/bin/claude-watcher-tui
 --cards             start in cards layout
 --no-topic          hide the per-session topic line (toggle live with 't')
 --no-hover          disable the hover tooltip (toggle live with 'h')
+--no-click-focus    clicking a row no longer focuses its terminal (Enter/Space still do)
 --sort default|idle sort order (default: default; toggle live with 's')
 --idle-format none|loose|precise  idle duration on idle rows (default: none; cycle live with 'i')
 ```
