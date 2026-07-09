@@ -861,6 +861,14 @@ def get_session_state(pid: int, cwd: str | None,
     jsonl_state, context_pct, tool, topic, last_activity = get_session_info_from_jsonl(
         cwd, config_dir, session_id)
     if reg:
+        # /rename : un nom choisi par l'utilisateur (champ `name` sans
+        # nameSource='derived' — 'derived' = nom auto-généré, redondant avec le
+        # cwd) prime sur le titre IA du JSONL comme sujet affiché. Même
+        # interrupteur features.show_topic que le sujet classique.
+        reg_name = reg.get('name')
+        if reg_name and reg.get('nameSource') != 'derived' \
+                and getattr(CFG, 'show_topic', True):
+            topic = reg_name
         status = reg.get('status', '')
         state = _STATUS_MAP.get(status, 'idle')
         # 'shell' persiste tant qu'un shell de fond tourne (un `!cmd` interactif
