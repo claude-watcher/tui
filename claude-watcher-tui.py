@@ -195,6 +195,7 @@ STRINGS = {
         'title':      'CLAUDE CODE WATCHER',
         'waiting':    'attente',
         'working':    'travaille',
+        'background': 'en fond',
         'idle':       'idle',
         'no_session': 'aucune session active',
         'attend':     'attend',
@@ -208,7 +209,9 @@ STRINGS = {
         'col_proj':   'projet',
         'col_meta':   'pid · durée',
         'col_ctx':    'ctx',
-        'count':      '{w} en attente · {p} en cours · {t} total',
+        'count':      '{w} en attente · {p} en cours · ',
+        'count_bg':   '{b} en fond · ',
+        'count_total':'{t} total',
         'about':         'À propos',
         'close':         'Fermer',
         'copy':          'Copier la commande',
@@ -265,6 +268,7 @@ STRINGS = {
         'title':      'CLAUDE CODE WATCHER',
         'waiting':    'waiting',
         'working':    'working',
+        'background': 'background',
         'idle':       'idle',
         'no_session': 'no active session',
         'attend':     'waiting',
@@ -278,7 +282,9 @@ STRINGS = {
         'col_proj':   'project',
         'col_meta':   'pid · elapsed',
         'col_ctx':    'ctx',
-        'count':      '{w} waiting · {p} working · {t} total',
+        'count':      '{w} waiting · {p} working · ',
+        'count_bg':   '{b} background · ',
+        'count_total':'{t} total',
         'about':         'About',
         'close':         'Close',
         'copy':          'Copy command',
@@ -343,6 +349,7 @@ COLOR_TITLE   = "#cc8a2e"
 COLOR_WAITING = "#e86c3a"
 COLOR_WORKING = "#d4a052"
 COLOR_IDLE    = "#4caf7d"
+COLOR_BACKGROUND = "#5c8a9e"   # muted teal — un shell/tâche de fond tourne, Claude a rendu la main
 COLOR_CLAUDE  = "#cc785c"   # Claude brand orange — marque les instances CLAUDE_CONFIG_DIR custom
 TEXT_DIM2     = "#888898"
 
@@ -872,15 +879,19 @@ def get_session_state(pid: int, cwd: str | None,
         status = reg.get('status', '')
         state = _STATUS_MAP.get(status, 'idle')
         # 'shell' persiste tant qu'un shell de fond tourne (un `!cmd` interactif
-        # ou un Bash run_in_background), MÊME après que Claude a rendu la main :
-        # le statut reste figé sur 'shell' alors que la session attend en réalité
-        # l'utilisateur. On recoupe avec le JSONL — s'il indique que le tour est
-        # terminé (dernier assistant en stop_reason terminal → 'waiting'/'idle'),
-        # le shell n'est qu'un résidu de fond et l'état réel est celui du JSONL,
-        # pas 'working'. jsonl_state vaut None si le JSONL est introuvable : la
-        # condition est alors fausse et on garde l'ancien comportement.
+        # ou un Bash run_in_background, dont un Monitor), MÊME après que Claude a
+        # rendu la main : le statut reste figé sur 'shell' alors que le tour est
+        # terminé. On recoupe avec le JSONL — s'il indique que le tour est fini
+        # (dernier assistant en stop_reason terminal → 'waiting'/'idle'), on
+        # dégrade vers l'état 'background' : un travail de fond tourne encore,
+        # mais Claude ne calcule pas. On ne peut PAS distinguer un !cmd utilisateur
+        # d'un shell/Monitor Claude — le registre 'shell' est opaque là-dessus —
+        # d'où un état générique de basse priorité (waiting > working > background
+        # > idle), signalé sans voler la vedette à une session active/en attente.
+        # jsonl_state vaut None si le JSONL est introuvable : la condition est
+        # alors fausse et on garde 'working'.
         if status == 'shell' and jsonl_state in ('waiting', 'idle'):
-            state = jsonl_state
+            state = 'background'
         # Idle-since : instant EXACT du dernier changement d'état du registre
         # (ms epoch). Prioritaire sur le mtime du JSONL, qui bouge pour des
         # écritures de fond (résumés, todos) sans refléter l'inactivité réelle.
@@ -1007,6 +1018,7 @@ def scan_sessions() -> list[dict]:
                 'elapsed':         p['elapsed'],
                 'waiting':         False,
                 'working':         False,
+                'background':      False,
                 'context_pct':     None,
                 'tool':            None,
                 'terminal_pid':    None,
@@ -1057,6 +1069,7 @@ def scan_sessions() -> list[dict]:
             'elapsed':         p['elapsed'],
             'waiting':         state == 'waiting',
             'working':         state == 'working',
+            'background':      state == 'background',
             'context_pct':     context_pct,
             'tool':            tool,
             'terminal_pid':    term_pid,
@@ -1076,15 +1089,17 @@ def scan_sessions() -> list[dict]:
     if getattr(CFG, 'sort_mode', 'default') == 'idle':
         now = time.time()
         def _sort_key(s: dict) -> tuple:
-            if s['waiting']:   bucket = 0
-            elif s['working']: bucket = 1
-            else:              bucket = 2
+            if s['waiting']:      bucket = 0
+            elif s['working']:    bucket = 1
+            elif s['background']: bucket = 2
+            else:                 bucket = 3
             la = s.get('last_activity')
-            idle = ((now - la) if la is not None else float('inf')) if bucket == 2 else 0.0
+            idle = ((now - la) if la is not None else float('inf')) if bucket == 3 else 0.0
             return (bucket, idle, s['project'].lower())
         sessions.sort(key=_sort_key)
     else:
-        sessions.sort(key=lambda s: (not s['waiting'], not s['working'], s['project'].lower()))
+        sessions.sort(key=lambda s: (
+            not s['waiting'], not s['working'], not s['background'], s['project'].lower()))
     return sessions
 
 
@@ -1097,6 +1112,8 @@ def session_state_label(s: dict) -> tuple[str, str]:
         return COLOR_WAITING, tr('attend')
     if s['working']:
         return COLOR_WORKING, tr('working')
+    if s['background']:
+        return COLOR_BACKGROUND, tr('background')
     return COLOR_IDLE, tr('idle')
 
 
@@ -1635,7 +1652,7 @@ class WatcherApp(App):
 
         # On construit toutes les lignes EN MÉMOIRE d'abord, pour décider ensuite
         # entre mise à jour en place et reconstruction (cf. signature plus bas).
-        waiting = working = 0
+        waiting = working = background = 0
         target_row = 0
         row_tips: dict[str, Text] = {}  # str(pid) → infobulle (chemin + sujet complets)
         built: list[tuple[str, Text, Text, int]] = []  # (clé, cellule gauche, droite, hauteur)
@@ -1645,6 +1662,8 @@ class WatcherApp(App):
                 waiting += 1
             elif s['working']:
                 working += 1
+            elif s['background']:
+                background += 1
 
             daemon = s.get('daemon')
             # Cellule gauche : ● + chemin (ligne 1), pid · durée en sourdine (ligne 2).
@@ -1668,7 +1687,8 @@ class WatcherApp(App):
             # tronqué (« ctx 12% · 05 » au lieu de « 12:04:48 »).
             idle_fmt = getattr(CFG, 'idle_format', 'none')
             la = s.get('last_activity')
-            if idle_fmt != 'none' and la is not None and not s['working'] and not s['waiting']:
+            if idle_fmt != 'none' and la is not None \
+                    and not s['working'] and not s['waiting'] and not s['background']:
                 sess.append(f" · idle {format_idle(time.time() - la, idle_fmt)}", style=TEXT_DIM2)
             cfg = display_config_dir(s.get('config_dir'))
             if cfg:
@@ -1771,8 +1791,12 @@ class WatcherApp(App):
                 table.move_cursor(row=min(target_row, table.row_count - 1), scroll=False)
                 self.call_after_refresh(table.scroll_to, None, prior_scroll_y, animate=False)
 
+        # Ordre : waiting · working · [background ·] total — aligné sur le header GTK.
+        # Le fragment background n'apparaît que s'il y a au moins une session en fond.
+        bg_frag = tr('count_bg').format(b=background) if background else ''
         self.query_one("#counts", Static).update(
-            tr('count').format(w=waiting, p=working, t=len(sessions))
+            tr('count').format(w=waiting, p=working)
+            + bg_frag + tr('count_total').format(t=len(sessions))
         )
 
     # ── Version / update check ────────────────────────────────────────────────
@@ -1937,7 +1961,7 @@ def print_once() -> None:
         la = s.get('last_activity')
         idle = (f" · idle {format_idle(time.time() - la, idle_fmt)}"
                 if idle_fmt != 'none' and la is not None
-                and not s['working'] and not s['waiting'] else "")
+                and not s['working'] and not s['waiting'] and not s['background'] else "")
         topic = (s.get('topic') or '').strip().split('\n', 1)[0]
         top = f" · {topic}" if topic else ""
         agents = s.get('agents') or []
