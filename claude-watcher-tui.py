@@ -878,19 +878,26 @@ def get_session_state(pid: int, cwd: str | None,
             topic = reg_name
         status = reg.get('status', '')
         state = _STATUS_MAP.get(status, 'idle')
-        # 'shell' persiste tant qu'un shell de fond tourne (un `!cmd` interactif
-        # ou un Bash run_in_background, dont un Monitor), MÊME après que Claude a
-        # rendu la main : le statut reste figé sur 'shell' alors que le tour est
-        # terminé. On recoupe avec le JSONL — s'il indique que le tour est fini
-        # (dernier assistant en stop_reason terminal → 'waiting'/'idle'), on
-        # dégrade vers l'état 'background' : un travail de fond tourne encore,
-        # mais Claude ne calcule pas. On ne peut PAS distinguer un !cmd utilisateur
-        # d'un shell/Monitor Claude — le registre 'shell' est opaque là-dessus —
-        # d'où un état générique de basse priorité (waiting > working > background
-        # > idle), signalé sans voler la vedette à une session active/en attente.
-        # jsonl_state vaut None si le JSONL est introuvable : la condition est
-        # alors fausse et on garde 'working'.
-        if status == 'shell' and jsonl_state in ('waiting', 'idle'):
+        # Un statut de registre qui mappe sur 'working' peut rester FIGÉ alors que
+        # la session a en réalité rendu la main :
+        #   - 'shell' : un shell de fond (`!cmd` interactif ou Bash
+        #     run_in_background, dont un Monitor) persiste après la fin du tour ;
+        #   - 'busy'  : des sous-agents interrompus (crash / ESC) laissent le
+        #     statut bloqué sur 'busy' sans jamais repasser 'idle'.
+        # On recoupe avec le JSONL — s'il indique que le tour est fini (dernier
+        # assistant en stop_reason terminal, ou évènement système post-tour →
+        # 'waiting'/'idle'), on dégrade vers l'état 'background' : un travail de
+        # fond peut encore tourner, mais Claude ne calcule pas. On ne peut PAS
+        # distinguer un !cmd utilisateur d'un shell/Monitor Claude, ni un 'busy'
+        # résiduel — le registre est opaque là-dessus — d'où un état générique de
+        # basse priorité (waiting > working > background > idle), signalé sans
+        # voler la vedette à une session active/en attente. Une session vraiment
+        # active — y compris en attente de sous-agents, où le dernier message
+        # assistant porte les tool_use Task — donne jsonl_state='working' : la
+        # condition est fausse, aucune réconciliation. 'compacting' est
+        # volontairement EXCLU (vrai travail de fond, bref). jsonl_state vaut None
+        # si le JSONL est introuvable : la condition est fausse, on garde 'working'.
+        if status in ('shell', 'busy') and jsonl_state in ('waiting', 'idle'):
             state = 'background'
         # Idle-since : instant EXACT du dernier changement d'état du registre
         # (ms epoch). Prioritaire sur le mtime du JSONL, qui bouge pour des
