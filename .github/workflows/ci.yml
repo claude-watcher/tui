@@ -1,0 +1,33 @@
+name: ci
+
+# Tests on every PR and push to main.
+# The app ships as a single script with no packaging, and the tests stub
+# rich/textual (see tests/conftest.py), so `--no-project` keeps CI to a plain
+# interpreter + pytest — nothing to install, nothing to lock.
+
+on:
+  push:
+    branches: [main, master, develop, trunk]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Pytest
+        run: uv run --no-project --with pytest pytest tests/ -q
