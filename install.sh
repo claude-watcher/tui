@@ -115,6 +115,9 @@ if [[ ! -f "$HOME/.config/claude-watcher/config.ini" ]]; then
 [display]
 # refresh_ms = 2000
 EOF
+    # 0600 dès la création : le fichier peut recevoir un token de remote
+    # ([remote:<nom>] token=), et le watcher force ce mode à chaque écriture.
+    chmod 600 "$HOME/.config/claude-watcher/config.ini"
     echo "  ~/.config/claude-watcher/config.ini"
 else
     echo "  ~/.config/claude-watcher/config.ini (already exists, skipped)"

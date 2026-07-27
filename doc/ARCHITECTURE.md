@@ -24,11 +24,63 @@ show_agents  = true   # per-row spawned-subagent count + tooltip list (true | fa
 hide_daemons = false  # hide the Claude Code background daemon rows (true | false)
 hover        = true   # hover tooltip with full path + topic (true | false) — toggle live with 'h'
 click_focus  = true   # clicking a row focuses its terminal (true | false); off = Enter/Space only
+
+[remotes]
+poll_ms = 2000        # remote poll interval, separate from refresh_ms (a network round trip)
+
+[remote:lab]          # one section per remote machine; the name is the on-screen label
+url     = http://box:8000/   # the ONLY required key (webui speaks plain HTTP; see README)
+token   = s3cr3t      # optional; see the README for the resolution order
+enabled = true        # optional, default true; 1/yes/true/on · 0/no/false/off,
+                      # anything else is refused at startup
+label   = lab         # optional, defaults to the section name
 ```
+
+`poll_ms` defaults to 2000 and is floored at 250.
+
+No `[remote:*]` section and no `--remote` flag means no poll thread is started and no HTTP
+request is ever made — behaviour is exactly what it was before the feature existed.
+`save_config()` forces the file to mode `0600` on every write, unconditionally, because it
+may hold tokens (it opens with `os.open(..., 0o600)` and chmods an existing file *before*
+writing: `Path.touch(mode=…)` does not re-chmod one that already exists, which is exactly
+the upgrade path). Each remote gets one daemon thread that polls sequentially and writes
+into a cache under a lock — `refresh_sessions()` reads that cache and performs **no HTTP**,
+because it runs in the UI loop and one slow host would freeze the screen.
+
+Remote rows are read-only at the choke point: `kill_session()` and `focus_terminal()` both
+take the session dict and return `False` on `remote` as their first statement, because a
+remote pid `1234` is an unrelated *local* process `1234`. For the same reason a remote
+row's `config_dir` never becomes a local inotify watch (`local_config_dirs()`): a remote's
+`~/.claude` also exists on this machine, so the naive loop would register a local watch on
+a remote's behalf.
+
+Two clocks, deliberately: a remote's **staleness** is stamped with `time.monotonic()` (a
+backward NTP step or a resumed laptop must not make a day-dead host look fresh), while a
+session's `last_activity` stays on the **wall clock**, because the renderer compares it to
+`time.time()` exactly as it does for a local row. The state key is named `received_mono` so
+the two cannot be confused.
+
+The whole remote block is **shared verbatim with the GTK widget** — same constants, same
+adapter, same poller — and `tests/test_core_parity.py` compares the two files symbol by
+symbol on the AST (docstrings, comments and the client-naming tokens excluded), so the next
+drift is caught mechanically rather than by a comment nobody reads. **The same guard is
+mirrored in the GTK repo**, and it has to be: while it lived over there only, a core change
+landing as a TUI-only PR went green here and later reddened an unrelated GTK PR, blaming
+the wrong author. The sibling script is found at `../gtk/`, at the CI checkout path
+`_gtk/`, or via `CW_GTK_SCRIPT`; missing, the test is *skipped* locally but *fails* under
+`CI`. Both CIs check the sibling out branch-to-branch, which makes it an ordering
+constraint — a core change is green only once its twin is pushed.
+
+Note that this parity is claimed for the *remote block only*. The rest of the
+session-detection backend is derived from the GTK widget and follows it closely, but is not
+byte-identical: `scan_local_sessions` and `focus_terminal`, among others, have genuinely
+diverged.
 
 CLI flags (`--lang`, `--refresh-ms`, `--cards`, `--no-topic`, `--no-agents`,
 `--hide-daemons`, `--no-hover`, `--no-click-focus`, `--sort`, `--idle-format`,
-see the README) override these at launch. The live
+`--remote`, `--no-local`, see the README) override these at launch.
+`--remote NAME=URL` merges over a matching section (its URL wins for the run, the
+section's other keys survive) and is never persisted. The live
 toggles (`c` / `t` / `h` / `s` / `i`) write their new value straight back to
 `config.ini`, so a change survives the next restart.
 
