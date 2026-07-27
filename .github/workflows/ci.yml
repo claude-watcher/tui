@@ -1,9 +1,11 @@
 name: ci
 
-# Tests on every PR and push to main.
+# Tests, lint and shared-core parity on every PR and push to main.
 # The app ships as a single script with no packaging, and the tests stub
 # rich/textual (see tests/conftest.py), so `--no-project` keeps CI to a plain
 # interpreter + pytest — nothing to install, nothing to lock.
+# pytest-timeout is pulled in because pyproject.toml sets `timeout = 60`: without
+# the plugin the key is silently ignored and a hung stop() burns the whole job.
 
 on:
   push:
@@ -24,10 +26,58 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Le cœur « sessions distantes » est porté à l'identique par le widget GTK,
+      # et tests/test_core_parity.py le vérifie symbole par symbole. Sans ce
+      # checkout le test ÉCHOUE (CI est posé) au lieu de skipper : un garde-fou
+      # qui ne tourne jamais ne garde rien.
+      #
+      # Le MÊME checkout existe en miroir dans le dépôt GTK. Il le faut des deux
+      # côtés : tant qu'il n'était que là-bas, une modification du cœur livrée
+      # en PR sur CE dépôt passait au vert ici et faisait rougir, plus tard, une
+      # PR GTK sans rapport — en accusant le mauvais auteur.
+      #
+      # Branche à branche quand le même nom existe des deux côtés (une
+      # modification du cœur partagé arrive sous un seul nom de branche dans les
+      # deux dépôts), branche par défaut sinon. Corollaire, et c'est une
+      # CONTRAINTE D'ORDONNANCEMENT, pas un défaut : une modification du cœur
+      # n'est verte ici qu'une fois sa jumelle poussée sur le dépôt GTK.
+      - name: Checkout the GTK widget (shared remote core, matching branch)
+        id: gtk_branch
+        continue-on-error: true
+        uses: actions/checkout@v4
+        with:
+          repository: claude-watcher/gtk
+          ref: ${{ github.head_ref || github.ref_name }}
+          path: _gtk
+
+      - name: Checkout the GTK widget (default branch fallback)
+        if: steps.gtk_branch.outcome == 'failure'
+        uses: actions/checkout@v4
+        with:
+          repository: claude-watcher/gtk
+          path: _gtk
+
       - name: Install uv
         uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
 
       - name: Pytest
-        run: uv run --no-project --with pytest pytest tests/ -q
+        run: uv run --no-project --with pytest --with pytest-timeout pytest tests/ -q
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      # LA MÊME commande que le hook local, pas une réplique de deux de ses
+      # étapes : rejouer seulement ruff et mypy laissait passer les six autres
+      # hooks (fin de fichier, espaces en fin de ligne, YAML/TOML, clé privée,
+      # shebangs) chez un contributeur sans pre-commit installé.
+      - name: Pre-commit
+        run: uvx pre-commit@4.4.0 run --all-files --show-diff-on-failure

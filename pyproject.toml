@@ -1,0 +1,55 @@
+# Configuration des outils UNIQUEMENT — pas de table [project].
+#
+# Le watcher est un script mono-fichier PEP 723 (`#!/usr/bin/env -S uv run
+# --script`) : il n'y a rien à packager, et son shebang force le mode script,
+# donc uv ignore ce fichier au lancement. Il n'existe que pour donner un
+# emplacement canonique à ruff, mypy et pytest — le dépôt ne déclarait aucun
+# garde-fou, si bien que chaque remarque de typage ou de style était invisible
+# pour la CI.
+
+[tool.ruff]
+line-length = 110          # aligné sur webui ; à 88, 94 lignes préexistantes
+                           # sauteraient sans qu'aucune ne soit un défaut
+target-version = "py311"   # le script déclare requires-python >= 3.11
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "C4", "UP"]
+# Style MAISON, pas des défauts : le fichier aligne des `if x: y = 0` en colonnes
+# pour que les tables de correspondance se lisent d'un bloc. Reformater 2600
+# lignes pour satisfaire E701 coûterait un diff illisible et zéro bug corrigé.
+ignore = ["E701"]
+
+[tool.ruff.lint.per-file-ignores]
+# Les imports Textual/Rich sont DÉLIBÉRÉMENT au milieu du fichier : le bloc
+# distant au-dessus ne doit dépendre que de la stdlib (c'est ce qui le rend
+# testable sans toolkit graphique, cf. tests/conftest.py). E402 est déjà couvert
+# par des `# noqa` ligne à ligne ; I001 juge le bloc dans son ensemble.
+"claude-watcher-tui.py" = ["I001"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["claude-watcher-tui.py"]
+check_untyped_defs = true
+strict_optional = true
+warn_unused_configs = true
+ignore_missing_imports = true
+# NON activés, sciemment : disallow_untyped_defs et disallow_any_generics
+# lèveraient 49 remarques préexistantes (`list[dict]` non paramétré, callbacks
+# d'événements Textual) et warn_return_any 11 de plus, toutes de style maison.
+# Un garde-fou qu'on doit désactiver pour committer ne garde rien ; celui-ci
+# passe à zéro et attrape les vraies incohérences de type.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Le greffon est EXIGÉ : sans lui, `timeout` ci-dessous est ignoré en silence
+# (simple avertissement) et le garde-fou n'existe que dans la tête de son auteur.
+# Vérifié : sans deadline de lecture, la suite ne se termine jamais.
+required_plugins = ["pytest-timeout"]
+addopts = "-v --tb=short --strict-markers"
+# Un stop() cassé, ou une lecture sans échéance, faisait PENDRE la suite au lieu
+# de la faire échouer (la CI n'a pas de délai de job → 6 h de runner brûlées).
+# `required_plugins` ci-dessus rend le greffon obligatoire : sans lui, pytest
+# REFUSE de démarrer au lieu d'ignorer cette clé en silence. La suite se lance
+# donc via `uv run --with pytest --with pytest-timeout pytest` (ce que fait la
+# CI) et non par un interpréteur nu — prix assumé pour que le garde existe.
+timeout = 60
