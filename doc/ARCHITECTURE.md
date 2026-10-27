@@ -132,7 +132,9 @@ untouched. A `.git` directory (ordinary checkout) or a `gitdir:` pointing at
    **subagents** (see step 7). An interactive session and the background daemon
    share `comm == claude`; the daemon is told apart by its `claude daemon …`
    argv and rendered as a non-focusable `(D)` row (excluded from focus and kill,
-   hideable via `features.hide_daemons`).
+   hideable via `features.hide_daemons`). A non-interactive `claude`
+   (`-p`/`--print`/`--output-format`/`--input-format`) carrying the exact token
+   `--no-session-persistence` is skipped (headless ephemeral run, no transcript).
 2. **State (registry, when present)** — `~/.claude/sessions/<pid>.json` carries a
    `status` field updated in real time:
    - `busy` / `shell` / `compacting` → **working**
