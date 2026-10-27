@@ -48,23 +48,42 @@ jobs:
       # tentative ratée laissait `_gtk` en NON-dépôt, et le repli mourait sur
       # `git reset --hard HEAD`, si bien que le garde de parité comparait un
       # module vide et déclarait tous les symboles partagés manquants.
+      #
+      # Une PR venue d'un fork pousse sa jumelle sur ce même fork, jamais ici :
+      # la jumelle est cherchée d'abord dans le fork de l'auteur de la PR (censé
+      # garder le nom du dépôt), puis ici. Ne chercher qu'ici comparait une PR
+      # de fork au GTK d'avant la modification : un changement du cœur partagé
+      # venu d'un fork était rouge des deux côtés jusqu'à ce qu'on en fusionne
+      # un en rouge.
+      #
+      # Branche et propriétaire du fork passent par env, pas par `${{ }}` en
+      # ligne : le nom de branche d'une PR de fork est contrôlé par l'attaquant
+      # et serait injecté tel quel dans le script.
       - name: Resolve the GTK widget revision
         id: sibling
+        env:
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+          FORK_OWNER: ${{ github.event.pull_request.head.repo.fork && github.event.pull_request.head.repo.owner.login || '' }}
         run: |
           set -euo pipefail
-          branch="${{ github.head_ref || github.ref_name }}"
+          repo="claude-watcher/gtk"
           ref=""
-          if git ls-remote --exit-code --heads \
-               "https://github.com/claude-watcher/gtk.git" "$branch" >/dev/null 2>&1; then
-            ref="$branch"
-          fi
-          echo "gtk=${ref:-<branche par défaut>}"
+          for owner in ${FORK_OWNER:+"$FORK_OWNER"} claude-watcher; do
+            if git ls-remote --exit-code --heads \
+                 "https://github.com/$owner/gtk.git" "$BRANCH" >/dev/null 2>&1; then
+              repo="$owner/gtk"
+              ref="$BRANCH"
+              break
+            fi
+          done
+          echo "gtk=$repo@${ref:-<branche par défaut>}"
+          echo "repo=$repo" >> "$GITHUB_OUTPUT"
           echo "ref=$ref" >> "$GITHUB_OUTPUT"
 
       - name: Checkout the GTK widget (shared core)
         uses: actions/checkout@v4
         with:
-          repository: claude-watcher/gtk
+          repository: ${{ steps.sibling.outputs.repo }}
           ref: ${{ steps.sibling.outputs.ref }}
           path: _gtk
 
