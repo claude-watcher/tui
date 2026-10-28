@@ -158,6 +158,8 @@ def load_config() -> dict:
         'show_agents': f.get('show_agents', 'true').lower() == 'true',
         # Démon Claude Code : affiché par défaut, balisé (D) ; masquable ici.
         'hide_daemons': f.get('hide_daemons', 'false').lower() == 'true',
+        # Sessions Agent SDK (T3 Code…) : masquées par défaut, pilotées depuis leur outil.
+        'hide_sdk_sessions': f.get('hide_sdk_sessions', 'true').lower() == 'true',
         'hover':      f.get('hover', 'true').lower() == 'true',
         # Focus terminal au clic. Désactivable : cliquer le terminal pour le
         # remettre au premier plan ne doit pas voler le focus vers une autre
@@ -243,6 +245,9 @@ def parse_args(defaults: dict, argv: list[str] | None = None) -> argparse.Namesp
     p.add_argument('--hide-daemons', dest='hide_daemons', action='store_true',
                    default=defaults['hide_daemons'],
                    help="masque les lignes du démon Claude Code (balisées (D)).")
+    p.add_argument('--show-sdk-sessions', dest='hide_sdk_sessions', action='store_false',
+                   default=defaults['hide_sdk_sessions'],
+                   help="affiche les sessions Agent SDK (T3 Code…), masquées par défaut.")
     p.add_argument('--no-hover', dest='hover', action='store_false',
                    default=defaults['hover'],
                    help="désactive l'infobulle de survol. Bascule à la volée avec 'h'.")
@@ -345,6 +350,7 @@ STRINGS = {
         'cfg_topic':        'Sujet',
         'cfg_agents':       'Sous-agents',
         'cfg_daemons':      'Masquer les démons',
+        'cfg_sdk':          'Masquer les sessions SDK',
         'cfg_hover':        'Infobulle',
         'cfg_click':        'Focus au clic',
         'cfg_sort':         'Tri',
@@ -354,6 +360,7 @@ STRINGS = {
         'cfg_topic_d':      'Affiche le sujet (titre IA) sous chaque session.',
         'cfg_agents_d':     'Compte les sous-agents lancés ; détail dans l’infobulle.',
         'cfg_daemons_d':    'Masque les lignes du démon Claude Code (balisées (D)).',
+        'cfg_sdk_d':        'Masque les sessions lancées via l’Agent SDK (T3 Code…).',
         'cfg_hover_d':      'Infobulle au survol : chemin et sujet complets.',
         'cfg_click_d':      'Un clic focalise le terminal. Désactivé : Entrée/Espace uniquement.',
         'cfg_sort_d':       'Ordre : par projet, ou par inactivité (récents en tête).',
@@ -431,6 +438,7 @@ STRINGS = {
         'cfg_topic':        'Topic',
         'cfg_agents':       'Subagents',
         'cfg_daemons':      'Hide daemons',
+        'cfg_sdk':          'Hide SDK sessions',
         'cfg_hover':        'Tooltip',
         'cfg_click':        'Click focus',
         'cfg_sort':         'Sort',
@@ -440,6 +448,7 @@ STRINGS = {
         'cfg_topic_d':      'Show the topic (AI title) under each session.',
         'cfg_agents_d':     'Count spawned subagents; each detailed in the tooltip.',
         'cfg_daemons_d':    'Hide the Claude Code daemon rows (marked (D)).',
+        'cfg_sdk_d':        'Hide sessions started through the Agent SDK (T3 Code…).',
         'cfg_hover_d':      'Hover tooltip: full path and topic.',
         'cfg_click_d':      'Clicking a row focuses its terminal. Off: Enter/Space only.',
         'cfg_sort_d':       'Order: by project, or by idle time (recent first).',
@@ -648,7 +657,7 @@ def get_env(pid: int) -> dict[str, str]:
     try:
         return dict(
             kv.split('=', 1)
-            for kv in Path(f'/proc/{pid}/environ').read_bytes().decode().split('\x00')
+            for kv in Path(f'/proc/{pid}/environ').read_bytes().decode(errors='replace').split('\x00')
             if '=' in kv
         )
     except Exception:
@@ -1476,6 +1485,7 @@ def scan_local_sessions() -> list[dict]:
             if getattr(CFG, 'hide_daemons', False):
                 continue
             cwd = get_cwd(pid)
+            env = get_env(pid)
             sessions.append({
                 'pid':             pid,
                 'starttime':       p['starttime'],
@@ -1495,7 +1505,8 @@ def scan_local_sessions() -> list[dict]:
                 'window_id':       None,
                 'kitty_socket':    None,
                 'kitty_window_id': None,
-                'config_dir':      resolve_config_dir(get_env(pid)),
+                'config_dir':      resolve_config_dir(env),
+                'entrypoint':      env.get('CLAUDE_CODE_ENTRYPOINT') or None,
                 'agents':          [],
                 'daemon':          True,
             })
@@ -1551,10 +1562,17 @@ def scan_local_sessions() -> list[dict]:
             'kitty_socket':    kitty_socket,
             'kitty_window_id': kitty_window_id,
             'config_dir':      config_dir,
+            'entrypoint':      env.get('CLAUDE_CODE_ENTRYPOINT') or None,
             'agents':          (subagents.get(session_id, []) if session_id else []) + running_agents,
             'daemon':          False,
         })
     return sessions
+
+
+def is_sdk_session(s: dict) -> bool:
+    """Session lancée via l'Agent SDK (T3 Code, scripts SDK) : `CLAUDE_CODE_ENTRYPOINT` en `sdk-*`."""
+    ep = s.get('entrypoint')
+    return isinstance(ep, str) and ep.startswith('sdk-')
 
 
 def scan_sessions(remote_rows: list[dict] | None = None) -> list[dict]:
@@ -1571,6 +1589,9 @@ def scan_sessions(remote_rows: list[dict] | None = None) -> list[dict]:
     # appartiennent au cache du poller, les muter le corromprait durablement.
     if getattr(CFG, 'hide_daemons', False):
         sessions = [s for s in sessions if not s.get('daemon')]
+    # Un démon n'est pas une session : seul hide_daemons le gouverne, quel que soit son entrypoint.
+    if getattr(CFG, 'hide_sdk_sessions', True):
+        sessions = [s for s in sessions if s.get('daemon') or not is_sdk_session(s)]
     if not getattr(CFG, 'show_agents', True):
         sessions = [dict(s, agents=[]) if s.get('agents') else s for s in sessions]
     # Priorité d'état (attente > travaille > idle) dans tous les modes. En mode
@@ -1986,6 +2007,7 @@ def adapt_remote_row(row: object, remote: dict, received_at: float,
         # Affichage seulement : refresh_sessions ne DOIT PAS en faire un chemin
         # local (le ~/.claude d'un remote existe aussi ici).
         'config_dir':      clean_remote_str(row.get('config_dir'), 60),
+        'entrypoint':      clean_remote_str(row.get('entrypoint'), 40),
         'agents':          agents,
         'daemon':          bool(row.get('daemon')) or state == 'daemon',
         'remote':          remote['label'],
@@ -2732,6 +2754,11 @@ class ConfigScreen(ModalScreen):
                 yield Static(tr('cfg_daemons_d'), classes="cfg-desc")
             with Vertical(classes="cfg-item"):
                 with Horizontal(classes="cfg-head"):
+                    yield Label(tr('cfg_sdk'))
+                    yield Switch(value=getattr(CFG, 'hide_sdk_sessions', True), id="cfg-sdk")
+                yield Static(tr('cfg_sdk_d'), classes="cfg-desc")
+            with Vertical(classes="cfg-item"):
+                with Horizontal(classes="cfg-head"):
                     yield Label(f"{tr('cfg_hover')}  [dim](h)[/dim]")
                     yield Switch(value=getattr(CFG, 'hover', True), id="cfg-hover")
                 yield Static(tr('cfg_hover_d'), classes="cfg-desc")
@@ -2792,6 +2819,9 @@ class ConfigScreen(ModalScreen):
         elif event.switch.id == "cfg-daemons":
             CFG.hide_daemons = val
             save_config({'features': {'hide_daemons': 'true' if val else 'false'}})
+        elif event.switch.id == "cfg-sdk":
+            CFG.hide_sdk_sessions = val
+            save_config({'features': {'hide_sdk_sessions': 'true' if val else 'false'}})
         elif event.switch.id == "cfg-hover":
             CFG.hover = val
             if not val:

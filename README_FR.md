@@ -20,6 +20,7 @@ Une interface terminal (Textual) qui surveille toutes les sessions Claude Code a
 - Utilisation du contexte (`ctx%`) affichée si disponible
 - Nombre de **sous-agents** lancés par session (`N agents`), chacun détaillé dans l'infobulle de la ligne — désactivable dans les Réglages
 - **Démon** de fond affiché en ligne `(D)` non-focusable (masquable dans les Réglages)
+- Sessions Agent SDK (T3 Code, scripts SDK) masquées par défaut, locales et distantes — réaffichables dans les Réglages ou via `--show-sdk-sessions`
 - **Tri par inactivité** optionnel (`s`) — sessions les plus récemment inactives en tête
 - **Durée d'inactivité** optionnelle (`i`) sur les lignes idle — approx. (`02:24`, résolution minute) ou précise (`02:24:23`)
 - Sessions en **worktree** Git rattachées à leur vrai projet, étiquetées `↳ WT: <nom>`
@@ -105,6 +106,7 @@ uv run ~/.local/bin/claude-watcher-tui
 --no-topic          masque le sujet de session sous chaque ligne (bascule avec « t »)
 --no-agents         masque le compteur de sous-agents lancés par session
 --hide-daemons      masque les lignes du démon Claude Code (balisées (D))
+--show-sdk-sessions  affiche les sessions Agent SDK (T3 Code…), masquées par défaut
 --no-hover          désactive l'infobulle de survol (bascule avec « h »)
 --no-click-focus    le clic ne focalise plus le terminal (Entrée/Espace restent actifs)
 --sort default|idle  ordre de tri (défaut : default ; bascule avec « s »)
