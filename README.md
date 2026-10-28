@@ -21,6 +21,7 @@ A terminal UI (Textual) that monitors all running Claude Code sessions on your m
 - Spawned **subagent count** per session (`N agents`), with each agent detailed in the row tooltip — toggle off in Settings
 - Background **daemon** shown as a non-focusable `(D)` row (hideable in Settings)
 - Agent SDK sessions (T3 Code, SDK scripts) hidden by default, local and remote — shown again from Settings or `--show-sdk-sessions`
+- The binary's helper modes (e.g. Chrome bridge `--chrome-native-host`, Chrome MCP server `--claude-in-chrome-mcp`) are not listed as sessions
 - Optional **sort by idle time** (`s`) — most-recently-idle sessions on top
 - Optional **idle duration** (`i`) on idle rows — approx (`02:24`, minute res) or precise (`02:24:23`)
 - Git **worktree** sessions resolved to their real project, tagged `↳ WT: <name>`
