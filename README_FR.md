@@ -21,6 +21,7 @@ Une interface terminal (Textual) qui surveille toutes les sessions Claude Code a
 - Nombre de **sous-agents** lancés par session (`N agents`), chacun détaillé dans l'infobulle de la ligne — désactivable dans les Réglages
 - **Démon** de fond affiché en ligne `(D)` non-focusable (masquable dans les Réglages)
 - Sessions Agent SDK (T3 Code, scripts SDK) masquées par défaut, locales et distantes — réaffichables dans les Réglages ou via `--show-sdk-sessions`
+- Modes helper du binaire (ex. pont Chrome `--chrome-native-host`, serveur MCP Chrome `--claude-in-chrome-mcp`) non listés comme sessions
 - **Tri par inactivité** optionnel (`s`) — sessions les plus récemment inactives en tête
 - **Durée d'inactivité** optionnelle (`i`) sur les lignes idle — approx. (`02:24`, résolution minute) ou précise (`02:24:23`)
 - Sessions en **worktree** Git rattachées à leur vrai projet, étiquetées `↳ WT: <nom>`
