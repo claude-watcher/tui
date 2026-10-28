@@ -22,6 +22,7 @@ idle_format = none     # idle duration on idle rows: none | loose (minute res, [
 show_topic   = true   # per-row session topic line (true | false) — toggle live with 't'
 show_agents  = true   # per-row spawned-subagent count + tooltip list (true | false)
 hide_daemons = false  # hide the Claude Code background daemon rows (true | false)
+hide_sdk_sessions = true  # hide Agent SDK sessions, CLAUDE_CODE_ENTRYPOINT=sdk-* (true | false)
 hover        = true   # hover tooltip with full path + topic (true | false) — toggle live with 'h'
 click_focus  = true   # clicking a row focuses its terminal (true | false); off = Enter/Space only
 
@@ -77,7 +78,7 @@ byte-identical: `scan_local_sessions` and `focus_terminal`, among others, have g
 diverged.
 
 CLI flags (`--lang`, `--refresh-ms`, `--cards`, `--no-topic`, `--no-agents`,
-`--hide-daemons`, `--no-hover`, `--no-click-focus`, `--sort`, `--idle-format`,
+`--hide-daemons`, `--show-sdk-sessions`, `--no-hover`, `--no-click-focus`, `--sort`, `--idle-format`,
 `--remote`, `--no-local`, see the README) override these at launch.
 `--remote NAME=URL` merges over a matching section (its URL wins for the run, the
 section's other keys survive) and is never persisted. The live
@@ -132,7 +133,10 @@ untouched. A `.git` directory (ordinary checkout) or a `gitdir:` pointing at
    **subagents** (see step 7). An interactive session and the background daemon
    share `comm == claude`; the daemon is told apart by its `claude daemon …`
    argv and rendered as a non-focusable `(D)` row (excluded from focus and kill,
-   hideable via `features.hide_daemons`). A non-interactive `claude`
+   hideable via `features.hide_daemons`). Each row carries the raw
+   `CLAUDE_CODE_ENTRYPOINT` as `entrypoint` (remote rows: copied by `adapt_remote_row`,
+   40 chars max); `features.hide_sdk_sessions` (default `true`) drops `sdk-*` rows in
+   `scan_sessions` after the local/remote merge, daemon rows excepted. A non-interactive `claude`
    (`-p`/`--print`/`--output-format`/`--input-format`) carrying the exact token
    `--no-session-persistence` is skipped (headless ephemeral run, no transcript).
 2. **State (registry, when present)** — `~/.claude/sessions/<pid>.json` carries a
